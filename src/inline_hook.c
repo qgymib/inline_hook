@@ -24,7 +24,7 @@
         ((TYPE*)((uint8_t*)(ptr) - (size_t)&((TYPE*)0)->member))
 #endif
 
-#define INLINE_HOOK_DECLARE_INTERFACE(fn_inject, fn_uninject) \
+#define INLINE_HOOK_MAKE_INTERFACE(fn_inject, fn_uninject) \
     int inline_hook_inject(void** origin, void* target, void* detour) {\
         int ret;\
         if ((ret = fn_inject(origin, target, detour)) != 0) {\
@@ -181,19 +181,6 @@ static void _x86_64_fill_jump_code_near(uint8_t jump_code[5], intptr_t addr_diff
     memcpy(&jump_code[1], &code, sizeof(code));
 }
 
-static size_t _x86_64_fill_jump_code(uint8_t jump_code[13], void* target, void* detour)
-{
-    intptr_t addr_diff = (char*)detour - (char*)target;
-    if (-(intptr_t)0x80000000 <= addr_diff && addr_diff < 0x80000000)
-    {
-        _x86_64_fill_jump_code_near(jump_code, addr_diff);
-        return 5;
-    }
-
-    assert(0);
-    return 0;
-}
-
 static void _x86_64_do_inject(void* arg)
 {
     trampline_x86_64_t* handle = arg;
@@ -222,9 +209,13 @@ static ZydisAddressWidth _x86_64_get_address_width(void)
     return ZYDIS_ADDRESS_WIDTH_MAX_VALUE;
 }
 
-static uint8_t* _x86_64_get_dist_addr(const uint8_t* baseaddr, const ZydisDecodedOperand* oper)
+static uint8_t* _x86_64_get_dist_addr(uint8_t* baseaddr, const ZydisDecodedOperand* oper)
 {
-    return baseaddr + oper->imm.is_signed ? oper->imm.value.s : oper->imm.value.u;
+    if (oper->imm.is_signed)
+    {
+        return baseaddr + oper->imm.value.s;
+    }
+    return baseaddr + oper->imm.value.u;
 }
 
 static int _x86_64_try_convert_jmp(trampline_x86_64_t* handle, const ZydisDecodedInstruction* insn, x86_64_convert_ctx_t* ctx)
@@ -236,7 +227,7 @@ static int _x86_64_try_convert_jmp(trampline_x86_64_t* handle, const ZydisDecode
         assert(insn->operand_count == 1);\
         uint8_t* dist_addr = _x86_64_get_dist_addr(handle->addr_target + ctx->t_offset, &insn->operands[0]);\
         uint32_t relative_addr = (uint32_t)(dist_addr - &handle->wrap_opcode[ctx->o_offset] - 6);\
-        memcpy(handle->wrap_opcode[ctx->o_offset], &relative_addr, 4);\
+        memcpy(&handle->wrap_opcode[ctx->o_offset], &relative_addr, sizeof(relative_addr));\
         ctx->o_offset += 4;\
     } while (0);\
     return 0
@@ -264,7 +255,7 @@ static int _x86_64_try_convert_jmp(trampline_x86_64_t* handle, const ZydisDecode
     case ZYDIS_MNEMONIC_JLE:    FILL_JUMP_NEAR_CODE_AND_RETURN(0x8e);
     case ZYDIS_MNEMONIC_JMP: {
         uint8_t* dist_addr = _x86_64_get_dist_addr(handle->addr_target + ctx->t_offset, &insn->operands[0]);
-        _x86_64_fill_jump_code_near(handle->wrap_opcode[ctx->o_offset], dist_addr - &handle->wrap_opcode[o_offset]);
+        _x86_64_fill_jump_code_near(&handle->wrap_opcode[ctx->o_offset], dist_addr - &handle->wrap_opcode[ctx->o_offset]);
         ctx->o_offset += 5;
         return 0;
     }
@@ -314,8 +305,8 @@ static int _x86_64_generate_trampoline_opcode(trampline_x86_64_t* handle)
             continue;
         }
 
-        memcpy(&handle->wrap_opcode[convert_ctx.o_offset], &handle->addr_target[convert_ctx.t_offset], len);
-        convert_ctx.o_offset += len;
+        memcpy(&handle->wrap_opcode[convert_ctx.o_offset], &handle->addr_target[convert_ctx.t_offset], instruction.length);
+        convert_ctx.o_offset += instruction.length;
     }
 
     int32_t addr_diff = &handle->addr_target[convert_ctx.t_offset] - &handle->wrap_opcode[convert_ctx.o_offset];
@@ -362,7 +353,7 @@ static void _x86_64_inline_hook_uninject(void* origin)
     }
 }
 
-INLINE_HOOK_DECLARE_INTERFACE(_x86_64_inline_hook_inject, _x86_64_inline_hook_uninject)
+INLINE_HOOK_MAKE_INTERFACE(_x86_64_inline_hook_inject, _x86_64_inline_hook_uninject)
 
 #elif defined(__ARM_ARCH_6T2__) ||\
     defined(__ARM_ARCH_7__) ||\
@@ -530,8 +521,9 @@ static void _arm64_inline_hook_uninject(void* origin)
     }
 }
 
-INLINE_HOOK_DECLARE_INTERFACE(_arm64_inline_hook_inject, _arm64_inline_hook_uninject)
+INLINE_HOOK_MAKE_INTERFACE(_arm64_inline_hook_inject, _arm64_inline_hook_uninject)
 
 #else
 #   error "unsupport hardware platform"
+INLINE_HOOK_MAKE_INTERFACE(NULL, NULL)
 #endif
