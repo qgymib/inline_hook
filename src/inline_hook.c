@@ -63,25 +63,52 @@ static void* _page_of(void* addr, size_t page_size)
     return (char*)((uintptr_t)addr & ~(page_size - 1));
 }
 
+/**
+ * @brief Set memory protect mode as READ/WRITE/EXEC
+ */
+static int _system_protect_as_RWE(void* addr, size_t size)
+{
+    int flag_failure = 0;
+#if defined(_WIN32)
+    DWORD lpflOldProtect;
+    flag_failure = 0 == VirtualProtect(addr, size, PAGE_EXECUTE_READWRITE, &lpflOldProtect);
+#elif defined(__linux__)
+    flag_failure = -1 == mprotect(addr, size, PROT_READ | PROT_WRITE | PROT_EXEC);
+#else
+    flag_failure = 1;
+#endif
+    return flag_failure ? -1 : 0;
+}
+
+/**
+ * @brief Set memory protect mode as READ/EXEC
+ */
+static int _system_protect_as_RE(void* addr, size_t size)
+{
+    int flag_failure = 0;
+#if defined(_WIN32)
+    DWORD lpflOldProtect;
+    flag_failure = 0 == VirtualProtect(addr, size, PAGE_EXECUTE_READ, &lpflOldProtect);
+#elif defined(__linux__)
+    flag_failure = -1 == mprotect(addr, size, PROT_READ | PROT_EXEC);
+#else
+    flag_failure = 1;
+#endif
+    return flag_failure ? -1 : 0;
+}
+
 static int _system_modify_opcode(void* addr, size_t size, void (*callback)(void*), void* data)
 {
     const size_t page_size = _get_page_size();
 
-    int flag_failure = 0;
     uint8_t* start_addr = (uint8_t*)_page_of(addr, page_size);
     uint8_t* end_addr = (uint8_t*)addr + size;
 
     const size_t n_page = ((end_addr - start_addr - 1) / page_size) + 1;
     const size_t protect_size = page_size * n_page;
 
-    /* Remove memory protect */
-#if defined(_WIN32)
-    DWORD lpflOldProtect;
-    flag_failure = 0 == VirtualProtect(start_addr, protect_size, PAGE_EXECUTE_READWRITE, &lpflOldProtect);
-#elif defined(__linux__)
-    flag_failure = -1 == mprotect(start_addr, protect_size, PROT_READ | PROT_WRITE | PROT_EXEC);
-#endif
-    if (flag_failure)
+    /* Remove write protect */
+    if (_system_protect_as_RWE(start_addr, protect_size) < 0)
     {
         return -1;
     }
@@ -89,13 +116,9 @@ static int _system_modify_opcode(void* addr, size_t size, void (*callback)(void*
     /* call callback */
     callback(data);
 
-    /* Add memory protect */
-#if defined(_WIN32)
-    flag_failure = 0 == VirtualProtect(start_addr, protect_size, PAGE_EXECUTE_READ, &lpflOldProtect);
-#elif defined(__linux__)
-    flag_failure = -1 == mprotect(start_addr, protect_size, PROT_READ | PROT_EXEC);
-#endif
-    assert(flag_failure == 0);
+    /* Add write protect */
+    int ret = _system_protect_as_RE(start_addr, protect_size);
+    assert(ret == 0);
 
     return 0;
 }
@@ -103,6 +126,7 @@ static int _system_modify_opcode(void* addr, size_t size, void (*callback)(void*
 #if defined(__i386__) || defined(__amd64__) || defined(_M_IX86) || defined(_M_AMD64)
 
 #include "Zydis/Zydis.h"
+#include <malloc.h>
 
 #define X86_64_MAX_INSTRUCTION_SIZE         15
 #define X86_64_COND_JUMP_SHORT_SIZE         2
@@ -116,7 +140,7 @@ typedef struct x86_64_convert_ctx
 }x86_64_convert_ctx_t;
 #define X86_64_CONVERT_CTX_INIT { 0, 0, 0 }
 
-typedef struct trampline_x86_64
+typedef struct x86_64_trampoline
 {
     uint8_t*    addr_target;            /**< Target function address */
     uint8_t*    addr_detour;            /**< Detour function address */
@@ -164,9 +188,9 @@ typedef struct trampline_x86_64
      * [40, 63]:    Reserved, not used.
      */
     uint8_t     wrap_opcode[64];
-}trampline_x86_64_t;
+}x86_64_trampoline_t;
 
-static uint8_t* _x86_64_wrap_opcode_get_redirect_addr(trampline_x86_64_t* handle, size_t n)
+static uint8_t* _x86_64_wrap_opcode_get_redirect_addr(x86_64_trampoline_t* handle, size_t n)
 {
     return &handle->wrap_opcode[24 + n * 5];
 }
@@ -183,13 +207,13 @@ static void _x86_64_fill_jump_code_near(uint8_t jump_code[5], intptr_t addr_diff
 
 static void _x86_64_do_inject(void* arg)
 {
-    trampline_x86_64_t* handle = arg;
+    x86_64_trampoline_t* handle = arg;
     memcpy(handle->addr_target, handle->redirect_opcode, sizeof(handle->redirect_opcode));
 }
 
 static void _x86_64_undo_inject(void* arg)
 {
-    trampline_x86_64_t* handle = arg;
+    x86_64_trampoline_t* handle = arg;
     memcpy(handle->addr_target, handle->backup_opcode, sizeof(handle->backup_opcode));
 }
 
@@ -218,7 +242,7 @@ static uint8_t* _x86_64_get_dist_addr(uint8_t* baseaddr, const ZydisDecodedOpera
     return baseaddr + oper->imm.value.u;
 }
 
-static int _x86_64_try_convert_jmp(trampline_x86_64_t* handle, const ZydisDecodedInstruction* insn, x86_64_convert_ctx_t* ctx)
+static int _x86_64_try_convert_jmp(x86_64_trampoline_t* handle, const ZydisDecodedInstruction* insn, x86_64_convert_ctx_t* ctx)
 {
 #define FILL_JUMP_NEAR_CODE_AND_RETURN(opcode2)    \
     do {\
@@ -283,7 +307,7 @@ static int _x86_64_try_convert_jmp(trampline_x86_64_t* handle, const ZydisDecode
  * @brief Generate swap code and jump to original function
  * @return  If return size if smaller than `num_opcode`, it is failure
  */
-static int _x86_64_generate_trampoline_opcode(trampline_x86_64_t* handle)
+static int _x86_64_generate_trampoline_opcode(x86_64_trampoline_t* handle)
 {
     ZydisDecoder decoder;
     ZydisDecoderInit(&decoder, ZYDIS_MACHINE_MODE_LONG_64, _x86_64_get_address_width());
@@ -317,15 +341,23 @@ static int _x86_64_generate_trampoline_opcode(trampline_x86_64_t* handle)
 
 static int _x86_64_inline_hook_inject(void** origin, void* target, void* detour)
 {
-    trampline_x86_64_t* handle = malloc(sizeof(trampline_x86_64_t));
+    size_t page_size = _get_page_size();
+    x86_64_trampoline_t* handle = memalign(page_size, page_size);
     if (handle == NULL)
     {
         return -1;
     }
+    if (_system_protect_as_RWE(handle, page_size) < 0)
+    {
+        free(handle);
+        return -1;
+    }
+
     memset(handle->wrap_opcode, 0xcc, sizeof(handle->wrap_opcode));
     handle->addr_target = target;
     handle->addr_detour = detour;
     _x86_64_fill_jump_code_near(handle->redirect_opcode, (char*)detour - (char*)target);
+    memcpy(handle->backup_opcode, target, sizeof(handle->backup_opcode));
 
     if (_x86_64_generate_trampoline_opcode(handle) < 0)
     {
@@ -346,7 +378,7 @@ static int _x86_64_inline_hook_inject(void** origin, void* target, void* detour)
 
 static void _x86_64_inline_hook_uninject(void* origin)
 {
-    trampline_x86_64_t* handle = container_of(origin, trampline_x86_64_t, wrap_opcode);
+    x86_64_trampoline_t* handle = container_of(origin, x86_64_trampoline_t, wrap_opcode);
     if (_system_modify_opcode(handle->addr_target, sizeof(handle->redirect_opcode), _x86_64_undo_inject, handle) > 0)
     {
         assert(!"modify opcode failed");
