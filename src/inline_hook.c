@@ -126,7 +126,7 @@ static int _system_modify_opcode(void* addr, size_t size, void (*callback)(void*
 #if defined(__i386__) || defined(__amd64__) || defined(_M_IX86) || defined(_M_AMD64)
 
 #include "Zydis/Zydis.h"
-#include <malloc.h>
+#include <stdlib.h>
 
 #define X86_64_MAX_INSTRUCTION_SIZE         15
 #define X86_64_COND_JUMP_SHORT_SIZE         2
@@ -333,23 +333,38 @@ static int _x86_64_generate_trampoline_opcode(x86_64_trampoline_t* handle)
         convert_ctx.o_offset += instruction.length;
     }
 
-    int32_t addr_diff = &handle->addr_target[convert_ctx.t_offset] - &handle->wrap_opcode[convert_ctx.o_offset];
+    intptr_t addr_diff = &handle->addr_target[convert_ctx.t_offset] - &handle->wrap_opcode[convert_ctx.o_offset];
     _x86_64_fill_jump_code_near(&handle->wrap_opcode[convert_ctx.o_offset], addr_diff);
 
     return 0;
 }
 
+static void* _alloc_execute_memory(size_t size)
+{
+#if defined(_WIN32)
+    return VirtualAlloc(NULL, size, MEM_COMMIT, PAGE_EXECUTE_READWRITE);
+#else
+    void* ptr = NULL;
+    if (posix_memalign(&ptr, _get_page_size(), size) != 0)
+    {
+        return NULL;
+    }
+    if (_system_protect_as_RWE(ptr, size) < 0)
+    {
+        free(ptr);
+        return NULL;
+    }
+
+    return ptr;
+#endif
+}
+
 static int _x86_64_inline_hook_inject(void** origin, void* target, void* detour)
 {
     size_t page_size = _get_page_size();
-    x86_64_trampoline_t* handle = memalign(page_size, page_size);
+    x86_64_trampoline_t* handle = _alloc_execute_memory(page_size);
     if (handle == NULL)
     {
-        return -1;
-    }
-    if (_system_protect_as_RWE(handle, page_size) < 0)
-    {
-        free(handle);
         return -1;
     }
 
