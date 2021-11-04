@@ -158,6 +158,43 @@ static void _flush_instruction_cache(void* addr, size_t size)
 #endif
 }
 
+/**
+ * @brief Alloc a block of memory that has EXEC attribute
+ * @param[in] size  Memory size
+ * @return          Address
+ */
+static void* _alloc_execute_memory(size_t size)
+{
+#if defined(_WIN32)
+    return VirtualAlloc(NULL, size, MEM_COMMIT, PAGE_EXECUTE_READWRITE);
+#else
+    void* ptr = NULL;
+    if (posix_memalign(&ptr, _get_page_size(), size) != 0)
+    {
+        return NULL;
+    }
+    if (_system_protect_as_RWE(ptr, size) < 0)
+    {
+        free(ptr);
+        return NULL;
+    }
+
+    return ptr;
+#endif
+}
+
+/**
+ * @brief Release memory alloc by #_alloc_execute_memory()
+ */
+static void _free_execute_memory(void* ptr)
+{
+#if defined(_WIN32)
+    VirtualFree(ptr, 0, MEM_RELEASE);
+#else
+    free(ptr);
+#endif
+}
+
 #if defined(__i386__) || defined(__amd64__) || defined(_M_IX86) || defined(_M_AMD64)
 
 #include "Zydis/Zydis.h"
@@ -212,7 +249,7 @@ typedef struct x86_64_trampoline
      *              instruction. Since max length of x86_64 instructions is 15 bytes, this field will max take 19 bytes.
      * [n+1, n+10]: Redirect opcode to jump back to original function.
      * [gap]:       There might be some gap due to unknown size of [0, n]. For safety it is set to `INT3` (0xcc). This
-     *              aera has mini 1 byte if n==18.
+     *              aera has minimum 1 byte if n==18.
      * [31, 63]:    EXT space . Need that for `JCXZ`-like opcode which only has short jump (128 range). We only need
      *              three because inject only cost 5 bytes, so the worst case is 3 short jump instructions.
      */
@@ -431,26 +468,6 @@ static int _x86_64_generate_trampoline_opcode(x86_64_trampoline_t* handle)
     return 0;
 }
 
-static void* _alloc_execute_memory(size_t size)
-{
-#if defined(_WIN32)
-    return VirtualAlloc(NULL, size, MEM_COMMIT, PAGE_EXECUTE_READWRITE);
-#else
-    void* ptr = NULL;
-    if (posix_memalign(&ptr, _get_page_size(), size) != 0)
-    {
-        return NULL;
-    }
-    if (_system_protect_as_RWE(ptr, size) < 0)
-    {
-        free(ptr);
-        return NULL;
-    }
-
-    return ptr;
-#endif
-}
-
 static int _x86_64_inline_hook_inject(void** origin, void* target, void* detour)
 {
     size_t page_size = _get_page_size();
@@ -468,20 +485,20 @@ static int _x86_64_inline_hook_inject(void** origin, void* target, void* detour)
     if ((ret = _x86_64_fill_jump_code(handle->redirect_opcode, target, detour)) < 0)
     {
         LOG("generate redirect opcode failed");
-        free(handle);
+        _free_execute_memory(handle);
         return -1;
     }
     memcpy(handle->backup_opcode, target, ret);
 
     if (_x86_64_generate_trampoline_opcode(handle) < 0)
     {
-        free(handle);
+        _free_execute_memory(handle);
         return -1;
     }
 
     if (_system_modify_opcode(target, sizeof(handle->redirect_opcode), _x86_64_do_inject, handle) < 0)
     {
-        free(handle);
+        _free_execute_memory(handle);
         return -1;
     }
 
@@ -499,7 +516,7 @@ static void _x86_64_inline_hook_uninject(void* origin)
         assert(!"modify opcode failed");
     }
     _flush_instruction_cache(handle->addr_target, _x86_64_get_opcode_copy_size(handle));
-    free(handle);
+    _free_execute_memory(handle);
 }
 
 int inline_hook_dump(char* buffer, unsigned size, const void* origin)
@@ -678,7 +695,7 @@ static int _arm64_inline_hook_inject(void** origin, void* target, void* detour)
     uint32_t jump_code[3] = { 0, 0, 0 };
     _arm_fill_jump_code(jump_code, target, detour);
 
-    arm_trampoline_t* handle = calloc(1, sizeof(arm_trampoline_t) + sizeof(uint32_t) * (3 * 2));
+    arm_trampoline_t* handle = _alloc_execute_memory(sizeof(arm_trampoline_t) + sizeof(uint32_t) * (3 * 2));
     if (handle == NULL)
     {
         return -1;
@@ -687,7 +704,7 @@ static int _arm64_inline_hook_inject(void** origin, void* target, void* detour)
 
     if (_system_modify_opcode(target, jump_code[2] != 0 ? 3 : 1, _arm_do_inject, handle) < 0)
     {
-        free(handle);
+        _free_execute_memory(handle);
         return -1;
     }
 
@@ -705,7 +722,7 @@ static void _arm64_inline_hook_uninject(void* origin)
         assert(!"modify opcode failed");
     }
     _flush_instruction_cache(handle->addr_target, sizeof(handle->redirect_opcode));
-    free(handle);
+    _free_execute_memory(handle);
 }
 
 INLINE_HOOK_MAKE_INTERFACE(_arm64_inline_hook_inject, _arm64_inline_hook_uninject)
