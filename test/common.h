@@ -6,6 +6,7 @@ extern "C" {
 
 #include "test.h"
 #include "inline_hook.h"
+#include <stdio.h>
 
 #ifdef __cplusplus
 }

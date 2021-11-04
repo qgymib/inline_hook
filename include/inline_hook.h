@@ -20,6 +20,15 @@ int inline_hook_inject(void** origin, void* target, void* detour);
  */
 void inline_hook_uninject(void** origin);
 
+/**
+ * @brief Dump information into buffer
+ * @param[out] buffer		Buffer to store information
+ * @param[in] size			Buffer size
+ * @param[in] origin		Inject context
+ * @return					The number of characters printed should have written.
+ */
+int inline_hook_dump(char* buffer, unsigned size, const void* origin);
+
 #ifdef __cplusplus
 }
 #endif
