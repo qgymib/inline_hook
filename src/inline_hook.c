@@ -210,7 +210,7 @@ typedef struct x86_64_convert_ctx
     size_t      t_offset;               /**< offset for #trampline_x86_64_t::addr_target */
     size_t      ext_pos;                /**< position of ext space */
 }x86_64_convert_ctx_t;
-#define X86_64_CONVERT_CTX_INIT { 0, 0, 31 }
+#define X86_64_CONVERT_CTX_INIT { 0, 0, 33 }
 
 typedef struct x86_64_trampoline
 {
@@ -230,14 +230,14 @@ typedef struct x86_64_trampoline
      *           n |                          |
      *             | ------------------------ |
      *         n+1 |                          |
-     *             | force redirect code      | -> 10 bytes
-     *        n+10 |                          |
+     *             | force redirect code      | -> 14 bytes
+     *        n+14 |                          |
      *             | ------------------------ |
      *             |                          |
-     *       [gap] | 0xcc                     | -> any space left must set to INT3
+     *       [gap] | 0xcc                     | -> Any space left must set to INT3, minimum 0 byte.
      *             |                          |
      *             | ------------------------ |
-     *          31 |                          |
+     *          33 |                          |
      *             | ext space (0xcc)         | -> EXT space for wrapping opcode. Any space left must set to INT3
      *          63 |                          |
      * [HIGH ADDR] | ------------------------ |
@@ -247,10 +247,11 @@ typedef struct x86_64_trampoline
      * [0, n]:      Store translated original function opcode. Redirect code inject into target function always take 5
      *              bytes, that means the worst case of original function opcode is 4 bytes whole instructions and 1 broken
      *              instruction. Since max length of x86_64 instructions is 15 bytes, this field will max take 19 bytes.
-     * [n+1, n+10]: Redirect opcode to jump back to original function.
+     * [n+1, n+14]: Redirect opcode to jump back to original function. 32 bit near jump require 5 bytes and 64 bit long
+     *              jump require 14 bytes.
      * [gap]:       There might be some gap due to unknown size of [0, n]. For safety it is set to `INT3` (0xcc). This
-     *              aera has minimum 1 byte if n==18.
-     * [31, 63]:    EXT space . Need that for `JCXZ`-like opcode which only has short jump (128 range). We only need
+     *              aera has minimum 0 byte if n==18.
+     * [33, 63]:    EXT space . Need that for `JCXZ`-like opcode which only has short jump (128 range). We only need
      *              three because inject only cost 5 bytes, so the worst case is 3 short jump instructions.
      */
     uint8_t     wrap_opcode[64];
@@ -433,9 +434,12 @@ static int _x86_64_generate_trampoline_opcode(x86_64_trampoline_t* handle)
     ZydisDecoderInit(&decoder, ZYDIS_MACHINE_MODE_LONG_64, _x86_64_get_address_width());
     ZydisDecodedInstruction instruction;
 
+    size_t opcode_size = _x86_64_get_opcode_copy_size(handle);
     x86_64_convert_ctx_t convert_ctx = X86_64_CONVERT_CTX_INIT;
-    for (; convert_ctx.t_offset <= sizeof(handle->redirect_opcode) && ZYAN_SUCCESS(ZydisDecoderDecodeBuffer(&decoder,
-        (uint8_t*)handle->addr_target + convert_ctx.t_offset, sizeof(handle->wrap_opcode) - convert_ctx.t_offset, &instruction));
+
+    int ret;
+    for (; convert_ctx.t_offset <= opcode_size && ZYAN_SUCCESS(ZydisDecoderDecodeBuffer(&decoder,
+        (uint8_t*)handle->addr_target + convert_ctx.t_offset, X86_64_MAX_INSTRUCTION_SIZE, &instruction));
         convert_ctx.t_offset += instruction.length)
     {
         /* If RET occur before opcode inject position, it is not save to inject because it may broken other things */
@@ -444,7 +448,7 @@ static int _x86_64_generate_trampoline_opcode(x86_64_trampoline_t* handle)
             return -1;
         }
 
-        int ret = _x86_64_try_convert_jmp(handle, &instruction, &convert_ctx);
+        ret = _x86_64_try_convert_jmp(handle, &instruction, &convert_ctx);
         if (ret == -1)
         {/* failure */
             return -1;
@@ -458,12 +462,13 @@ static int _x86_64_generate_trampoline_opcode(x86_64_trampoline_t* handle)
         convert_ctx.o_offset += instruction.length;
     }
 
-    if (_x86_64_fill_jump_code(&handle->wrap_opcode[convert_ctx.o_offset],
-        &handle->wrap_opcode[convert_ctx.o_offset], &handle->addr_target[convert_ctx.t_offset]) < 0)
+    if ((ret = _x86_64_fill_jump_code(&handle->wrap_opcode[convert_ctx.o_offset],
+        &handle->wrap_opcode[convert_ctx.o_offset], &handle->addr_target[convert_ctx.t_offset])) < 0)
     {
         LOG("generate opcode failed");
         return -1;
     }
+    convert_ctx.o_offset += ret;
 
     return 0;
 }
