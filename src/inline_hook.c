@@ -131,6 +131,33 @@ static int _system_modify_opcode(void* addr, size_t size, void (*callback)(void*
     return 0;
 }
 
+/**
+ * @brief Flush the processor's instruction cache for the region of memory.
+ *
+ * Some targets require that the instruction cache be flushed, after modifying
+ * memory containing code, in order to obtain deterministic behavior.
+ * 
+ * @param[in] addr      Start address
+ * @param[in] size      Address length
+ */
+static void _flush_instruction_cache(void* addr, size_t size)
+{
+#if defined(_WIN32)
+    HANDLE process_handle = OpenProcess(PROCESS_ALL_ACCESS, FALSE, GetCurrentProcessId());
+    if (process_handle == NULL)
+    {
+        return;
+    }
+
+    FlushInstructionCache(process_handle, addr, size);
+    CloseHandle(process_handle);
+#elif defined(__GNUC__) || defined(__clang__)
+    __builtin___clear_cache(addr, (uint8_t*)addr + size);
+#else
+#   error "unsupport flush_instruction_cache"
+#endif
+}
+
 #if defined(__i386__) || defined(__amd64__) || defined(_M_IX86) || defined(_M_AMD64)
 
 #include "Zydis/Zydis.h"
@@ -459,6 +486,7 @@ static int _x86_64_inline_hook_inject(void** origin, void* target, void* detour)
     }
 
     *origin = handle->wrap_opcode;
+    _flush_instruction_cache(target, _x86_64_get_opcode_copy_size(handle));
 
     return 0;
 }
@@ -470,6 +498,8 @@ static void _x86_64_inline_hook_uninject(void* origin)
     {
         assert(!"modify opcode failed");
     }
+    _flush_instruction_cache(handle->addr_target, _x86_64_get_opcode_copy_size(handle));
+    free(handle);
 }
 
 int inline_hook_dump(char* buffer, unsigned size, const void* origin)
@@ -562,41 +592,14 @@ INLINE_HOOK_MAKE_INTERFACE(_x86_64_inline_hook_inject, _x86_64_inline_hook_uninj
  * To know whether 12 bytes code is used, check if #trampoline_arm64_t::redirect_opcode[2]
  * is non-zero.
  */
-typedef struct trampoline_arm64
+typedef struct arm_trampoline
 {
-    void*       addr_target;            /**< Target function address */
-    void*       addr_detour;            /**< Detour function address */
+    uint8_t*    addr_target;            /**< Target function address */
+    uint8_t*    addr_detour;            /**< Detour function address */
     uint32_t    redirect_opcode[3];     /**< Opcode to redirect to detour function */
     uint32_t    backup_opcode[3];       /**< Original function code */
-#if defined(_MSC_VER)
-#   pragma warning(push)
-#   pragma warning(disable: 4200)
-#endif
-    uint32_t    wrap_opcode[];          /**< Opcode to call original function */
-#if defined(_MSC_VER)
-#   pragma warning(pop)
-#endif
-}trampoline_arm64_t;
-
-static void _reflash_insn_cache(void)
-{
-#if defined(__ARM_ARCH_6T2__) ||\
-    defined(__ARM_ARCH_7__) ||\
-    defined(__ARM_ARCH_7A__) ||\
-    defined(__ARM_ARCH_7R__) ||\
-    defined(__ARM_ARCH_7M__) ||\
-    defined(__ARM_ARCH_7S__) ||\
-    defined(__aarch64__)
-
-    __asm__ __volatile__(
-        "mov    r0, #0\n\t"
-        "mcr    p15, 0, r0, c7, c1, 0\n\t"  /* invalidate I-cache inner shareable */
-        "mcr    p15, 0, r0, c7, c5, 0"      /* I+BTB cache invalidate */
-        :::"r0"
-    );
-
-#endif
-}
+    uint32_t    wrap_opcode[64];        /**< Opcode to call original function */
+}arm_trampoline_t;
 
 static void _arm_fill_jump_code_near(uint32_t jump_code[1], intptr_t addr_diff)
 {
@@ -637,13 +640,13 @@ static void _arm_fill_jump_code(uint32_t jump_code[3], void* target, void* detou
 
 static void _arm_do_inject(void* arg)
 {
-    trampoline_arm64_t* handle = arg;
+    arm_trampoline_t* handle = arg;
 
     size_t copy_size = (handle->redirect_opcode[2] != 0 ? 3 : 1) * sizeof(uint32_t);
     memcpy(handle->addr_target, handle->redirect_opcode, copy_size);
 }
 
-static void _arm_init_trampoline(trampoline_arm64_t* handle, uint32_t jump_code[3], void* target, void* detour)
+static void _arm_init_trampoline(arm_trampoline_t* handle, uint32_t jump_code[3], void* target, void* detour)
 {
     handle->addr_target = target;
     handle->addr_detour = detour;
@@ -664,7 +667,7 @@ static void _arm_init_trampoline(trampoline_arm64_t* handle, uint32_t jump_code[
 
 static void _arm_undo_inject(void* arg)
 {
-    trampoline_arm64_t* handle = arg;
+    arm_trampoline_t* handle = arg;
 
     size_t copy_size = (handle->redirect_opcode[2] != 0 ? 3 : 1) * sizeof(uint32_t);
     memcpy(handle->addr_target, handle->backup_opcode, copy_size);
@@ -675,7 +678,7 @@ static int _arm64_inline_hook_inject(void** origin, void* target, void* detour)
     uint32_t jump_code[3] = { 0, 0, 0 };
     _arm_fill_jump_code(jump_code, target, detour);
 
-    trampoline_arm64_t* handle = calloc(1, sizeof(trampoline_arm64_t) + sizeof(uint32_t) * (3 * 2));
+    arm_trampoline_t* handle = calloc(1, sizeof(arm_trampoline_t) + sizeof(uint32_t) * (3 * 2));
     if (handle == NULL)
     {
         return -1;
@@ -688,20 +691,21 @@ static int _arm64_inline_hook_inject(void** origin, void* target, void* detour)
         return -1;
     }
 
-    _reflash_insn_cache();
     *origin = handle->wrap_opcode;
+    _flush_instruction_cache(target, sizeof(handle->redirect_opcode));
 
     return 0;
 }
 
 static void _arm64_inline_hook_uninject(void* origin)
 {
-    trampoline_arm64_t* handle = container_of(origin, trampoline_arm64_t, wrap_opcode);
-
+    arm_trampoline_t* handle = container_of(origin, arm_trampoline_t, wrap_opcode);
     if (_system_modify_opcode(handle->addr_target, handle->redirect_opcode[2] != 0 ? 3 : 1, _arm_undo_inject, handle) > 0)
     {
         assert(!"modify opcode failed");
     }
+    _flush_instruction_cache(handle->addr_target, sizeof(handle->redirect_opcode));
+    free(handle);
 }
 
 INLINE_HOOK_MAKE_INTERFACE(_arm64_inline_hook_inject, _arm64_inline_hook_uninject)
