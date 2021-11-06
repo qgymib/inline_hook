@@ -4,7 +4,10 @@ project(inlinehook)
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/cmake")
 
 add_library(${PROJECT_NAME}
-    src/inline_hook.c)
+    src/elfparser.c
+    src/inline_hook.c
+    src/log.c
+    src/once.c)
 
 target_include_directories(${PROJECT_NAME}
     PUBLIC

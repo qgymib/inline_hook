@@ -1,9 +1,13 @@
 #include "inline_hook.h"
+#define _GNU_SOURCE
+#include <link.h>
 #include <stdlib.h>
-#include <stdio.h>
+
 #include <assert.h>
 #include <inttypes.h>
 #include <string.h>
+#include "once.h"
+#include "elfparser.h"
 
 #if defined(_WIN32)
 #   include <windows.h>
@@ -13,12 +17,8 @@
 #   include <sys/mman.h>
 #endif
 
-//#define INLINE_HOOK_DEBUG
-#if defined(INLINE_HOOK_DEBUG)
-#   define LOG(fmt, ...)   printf("[%s:%d] " fmt "\n", __FUNCTION__, __LINE__, ##__VA_ARGS__)
-#else
-#   define LOG(fmt, ...)   do {} while (0)
-#endif
+#define INLINE_HOOK_DEBUG
+#include "log.h"
 
 /**
  * @brief Cast a member of a structure out to the containing structure
@@ -473,8 +473,37 @@ static int _x86_64_generate_trampoline_opcode(x86_64_trampoline_t* handle)
     return 0;
 }
 
+static int _x86_64_elf(struct dl_phdr_info* info, size_t size, void* data)
+{
+    (void)size;
+
+	int j;
+    int* p_ret = data;
+
+	if (*p_ret) return 0;
+	*p_ret = 1;
+
+    LOG("relocation: 0x%lx", (long)info->dlpi_addr);
+
+	for (j = 0; j < info->dlpi_phnum; j++)
+    {
+		if (info->dlpi_phdr[j].p_type == PT_LOAD)
+        {
+            void* elf_addr = (void*)(info->dlpi_addr + info->dlpi_phdr[j].p_vaddr);
+            LOG("executable loaded at %p", elf_addr);
+            dump_hex(elf_addr, sizeof(elf_header_t), 16);
+            elf_dump(stdout, elf_addr);
+			break;
+		}
+	}
+	return 0;
+}
+
 static int _x86_64_inline_hook_inject(void** origin, void* target, void* detour)
 {
+    int ret = 0;
+    dl_iterate_phdr(_x86_64_elf, &ret);
+
     size_t page_size = _get_page_size();
     x86_64_trampoline_t* handle = _alloc_execute_memory(page_size);
     if (handle == NULL)
@@ -486,7 +515,6 @@ static int _x86_64_inline_hook_inject(void** origin, void* target, void* detour)
     handle->addr_target = target;
     handle->addr_detour = detour;
 
-    int ret;
     if ((ret = _x86_64_fill_jump_code(handle->redirect_opcode, target, detour)) < 0)
     {
         LOG("generate redirect opcode failed");
