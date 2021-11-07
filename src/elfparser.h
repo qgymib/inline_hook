@@ -11,7 +11,7 @@ extern "C" {
  * @brief 
  * @see https://en.wikipedia.org/wiki/Executable_and_Linkable_Format
  */
-typedef struct elf_header
+typedef struct elf_file_header
 {
     /**
      * 0x7F followed by ELF(45 4c 46) in ASCII; these four bytes constitute the magic number.
@@ -161,68 +161,9 @@ typedef struct elf_header
      * Contains index of the section header table entry that contains the section names.
      */
     uint16_t e_shstrndx;
-}elf_header_t;
+}elf_file_header_t;
 
-typedef struct elf_program_header_32
-{
-    /**
-     * Identifies the type of the segment.
-     * | Value         | Name          | Meaning                                              |
-     * | ------------- | ------------- | ---------------------------------------------------- |
-     * | 0x00000000    | PT_NULL       | Program header table entry unused.                   |
-     * | 0x00000001    | PT_LOAD       | Loadable segment.                                    |
-     * | 0x00000002    | PT_DYNAMIC    | Dynamic linking information.                         |
-     * | 0x00000003    | PT_INTERP     | Interpreter information.                             |
-     * | 0x00000004    | PT_NOTE       | Auxiliary information.                               |
-     * | 0x00000005    | PT_SHLIB      | Reserved.                                            |
-     * | 0x00000006    | PT_PHDR       | Segment containing program header table itself.      |
-     * | 0x00000007    | PT_TLS        | Thread-Local Storage template.                       |
-     * | 0x60000000    | PT_LOOS       | Reserved inclusive range. Operating system specific. |
-     * | 0x6FFFFFFF    | PT_HIOS       |                                                      |
-     * | 0x70000000    | PT_LOPROC     | Reserved inclusive range. Processor specific.        |
-     * | 0x7FFFFFFF    | PT_HIPROC     |                                                      |
-     */
-    uint32_t p_type;
-
-    /**
-     * Offset of the segment in the file image.
-     */
-    uint32_t p_offset;
-
-    /**
-     * Virtual address of the segment in memory.
-     */
-    uint32_t p_vaddr;
-
-    /**
-     * On systems where physical address is relevant, reserved for segment's
-     * physical address.
-     */
-    uint32_t p_paddr;
-
-    /**
-     * Size in bytes of the segment in the file image. May be 0.
-     */
-    uint32_t p_filesz;
-
-    /**
-     * Size in bytes of the segment in memory. May be 0.
-     */
-    uint32_t p_memsz;
-
-    /**
-     * Segment-dependent flags (position for 32-bit structure).
-     */
-    uint32_t p_flags;
-
-    /**
-     * 0 and 1 specify no alignment. Otherwise should be a positive, integral
-     * power of 2, with p_vaddr equating p_offset modulus p_align.
-     */
-    uint32_t p_align;
-}elf_program_header_32_t;
-
-typedef struct elf_program_header_64
+typedef struct elf_program_header
 {
     /**
      * Identifies the type of the segment.
@@ -279,7 +220,7 @@ typedef struct elf_program_header_64
      * power of 2, with p_vaddr equating p_offset modulus p_align.
      */
     uint64_t p_align;
-}elf_program_header_64_t;
+}elf_program_header_t;
 
 typedef struct elf_section_header_32
 {
@@ -479,14 +420,31 @@ typedef struct elf_section_header_64
     uint64_t sh_entsize;
 }elf_section_header_64_t;
 
-int elf_parser_header(elf_header_t* dst, const void* addr);
+/**
+ * @brief Parser ELF file header
+ * @param[out] dst  File header information
+ * @param[in] addr  Buffer to parser
+ * @return          Result
+ */
+int elf_parser_file_header(elf_file_header_t* dst, const void* addr);
 
-int elf_parser_program32_header(elf_program_header_32_t* dst,
-    const elf_header_t* header, const void* addr, size_t idx);
+/**
+ * @brief Parser program header
+ * @param[out] dst Program header
+ * @param[in] header    File header
+ * @param[in] addr      The same value as #elf_parser_file_header()
+ * @param[in] idx       Which header you want to parser
+ * @return              Result
+ */
+int elf_parser_program_header(elf_program_header_t* dst,
+    const elf_file_header_t* header, const void* addr, size_t idx);
 
-int elf_parser_program64_header(elf_program_header_32_t* dst,
-    const elf_header_t* header, const void* addr, size_t idx);
-
+/**
+ * @brief Dump ELF information
+ * @param[in] io        FILE to store information
+ * @param[in] addr      Buffer to parser
+ * @return              Result
+ */
 int elf_dump(FILE* io, const void* addr);
 
 #ifdef __cplusplus

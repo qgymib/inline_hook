@@ -27,28 +27,40 @@ union ELF_U64
     uint8_t     u[8];
 };
 
+/**
+ * @brief Parser 16bit data as uint16_t
+ * @param[in] pdat      Buffer
+ * @param[in] EI_DATA   Endian
+ * @return              Result
+ */
 static uint16_t _elf_parser_16bit(const uint8_t* pdat, int EI_DATA)
 {
     union ELF_U16 elf_u16;
 
-    if (HOST_EI_DATA != EI_DATA)
-    {
-        elf_u16.u[0] = pdat[1];
-        elf_u16.u[1] = pdat[0];
-    }
-    else
+    if (HOST_EI_DATA == EI_DATA)
     {
         elf_u16.u[0] = pdat[0];
         elf_u16.u[1] = pdat[1];
     }
+    else
+    {
+        elf_u16.u[0] = pdat[1];
+        elf_u16.u[1] = pdat[0];
+    }
     return elf_u16.val;
 }
 
+/**
+ * @brief Parser 32bit data as uint32_t
+ * @param[in] pdat      Buffer
+ * @param[in] EI_DATA   Endian
+ * @return              Result
+ */
 static uint32_t _elf_parser_32bit(const uint8_t* pdat, int EI_DATA)
 {
     union ELF_U32 elf_u32;
 
-    if (HOST_EI_DATA != EI_DATA)
+    if (HOST_EI_DATA == EI_DATA)
     {
         elf_u32.u[0] = pdat[0];
         elf_u32.u[1] = pdat[1];
@@ -66,11 +78,17 @@ static uint32_t _elf_parser_32bit(const uint8_t* pdat, int EI_DATA)
     return elf_u32.val;
 }
 
+/**
+ * @brief Parser 64bit data as uint64_t
+ * @param[in] pdat      Buffer
+ * @param[in] EI_DATA   Endian
+ * @return              Result
+ */
 static uint64_t _elf_parser_64bit(const uint8_t* pdat, int EI_DATA)
 {
     union ELF_U64 elf_u64;
 
-    if (HOST_EI_DATA != EI_DATA)
+    if (HOST_EI_DATA == EI_DATA)
     {
         elf_u64.u[0] = pdat[0];
         elf_u64.u[1] = pdat[1];
@@ -95,93 +113,8 @@ static uint64_t _elf_parser_64bit(const uint8_t* pdat, int EI_DATA)
     return elf_u64.val;
 }
 
-int elf_parser_header(elf_header_t* dst, const void* addr)
-{
-    const uint8_t* pdat = addr;
-    size_t pos = 0;
-
-    const uint8_t magic_header[4] = { 0x7f, 0x45, 0x4c, 0x46 };
-    if (memcmp(addr, magic_header, sizeof(magic_header)) != 0)
-    {
-        return -1;
-    }
-
-    /* EI_MAG */
-    memcpy(dst->f_EI_MAG, magic_header, sizeof(magic_header));
-    pos += 4;
-
-    dst->f_EI_CLASS = pdat[pos++];
-    if (dst->f_EI_CLASS != 1 && dst->f_EI_CLASS != 2)
-    {
-        return -1;
-    }
-
-    dst->f_EI_DATA = pdat[pos++];
-    if (dst->f_EI_DATA != 1 && dst->f_EI_DATA != 2)
-    {
-        return -1;
-    }
-
-    dst->f_EI_VERSION = pdat[pos++];
-    dst->f_EI_OSABI = pdat[pos++];
-    dst->f_EI_ABIVERSION = pdat[pos++];
-    memcpy(dst->f_EI_PAD, &pdat[pos], sizeof(dst->f_EI_PAD));
-    pos += 7;
-
-    dst->e_type = _elf_parser_16bit(&pdat[pos], dst->f_EI_DATA);
-    pos += 2;
-
-    dst->e_machine = _elf_parser_16bit(&pdat[pos], dst->f_EI_DATA);
-    pos += 2;
-
-    dst->e_version = _elf_parser_32bit(&pdat[pos], dst->f_EI_DATA);
-    pos += 4;
-
-    if (dst->f_EI_CLASS == 1)
-    {
-        dst->e_entry = _elf_parser_32bit(&pdat[pos], dst->f_EI_DATA);
-        pos += 4;
-        dst->e_phoff = _elf_parser_32bit(&pdat[pos], dst->f_EI_DATA);
-        pos += 4;
-        dst->e_shoff = _elf_parser_32bit(&pdat[pos], dst->f_EI_DATA);
-        pos += 4;
-    }
-    else
-    {
-        dst->e_entry = _elf_parser_64bit(&pdat[pos], dst->f_EI_DATA);
-        pos += 8;
-        dst->e_phoff = _elf_parser_64bit(&pdat[pos], dst->f_EI_DATA);
-        pos += 8;
-        dst->e_shoff = _elf_parser_64bit(&pdat[pos], dst->f_EI_DATA);
-        pos += 8;
-    }
-
-    dst->e_flags = _elf_parser_32bit(&pdat[pos], dst->f_EI_DATA);
-    pos += 4;
-
-    dst->e_ehsize = _elf_parser_16bit(&pdat[pos], dst->f_EI_DATA);
-    pos += 2;
-
-    dst->e_phentsize = _elf_parser_16bit(&pdat[pos], dst->f_EI_DATA);
-    pos += 2;
-
-    dst->e_phnum = _elf_parser_16bit(&pdat[pos], dst->f_EI_DATA);
-    pos += 2;
-
-    dst->e_shentsize = _elf_parser_16bit(&pdat[pos], dst->f_EI_DATA);
-    pos += 2;
-
-    dst->e_shnum = _elf_parser_16bit(&pdat[pos], dst->f_EI_DATA);
-    pos += 2;
-
-    dst->e_shstrndx = _elf_parser_16bit(&pdat[pos], dst->f_EI_DATA);
-    pos += 2;
-
-    return 0;
-}
-
-int elf_parser_program32_header(elf_program_header_32_t* dst,
-    const elf_header_t* header, const void* addr, size_t idx)
+static int _elf_parser_program32_header(elf_program_header_t* dst,
+    const elf_file_header_t* header, const void* addr, size_t idx)
 {
     const uint8_t* pdat = (uint8_t*)addr + header->e_phoff + idx * header->e_phentsize;
     if (idx >= header->e_phnum)
@@ -218,8 +151,8 @@ int elf_parser_program32_header(elf_program_header_32_t* dst,
     return 0;
 }
 
-int elf_parser_program64_header(elf_program_header_32_t* dst,
-    const elf_header_t* header, const void* addr, size_t idx)
+static int _elf_parser_program64_header(elf_program_header_t* dst,
+    const elf_file_header_t* header, const void* addr, size_t idx)
 {
     const uint8_t* pdat = (uint8_t*)addr + header->e_phoff + idx * header->e_phentsize;
     if (idx >= header->e_phnum)
@@ -263,7 +196,7 @@ static const char* _elf_dump_header_get_type(uint16_t type)
     case 0x00:      return "NONE";
     case 0x01:      return "REL";
     case 0x02:      return "EXEC";
-    case 0x03:      return "DYN (Shared object file)";
+    case 0x03:      return "DYN (Position-Independent Executable file)";
     case 0x04:      return "CORE";
     case 0xFE00:    return "LOOS";
     case 0xFEFF:    return "HIOS";
@@ -380,7 +313,7 @@ static const char* _elf_dump_header_get_machine(uint16_t e_machine)
     }
 }
 
-static int _elf_dump_header(FILE* io, const elf_header_t* header)
+static int _elf_dump_header(FILE* io, const elf_file_header_t* header)
 {
     return fprintf(io,
         "Class:                             %s\n"
@@ -392,8 +325,8 @@ static int _elf_dump_header(FILE* io, const elf_header_t* header)
         "Machine:                           %s\n"
         "Version:                           0x%" PRIx32 "\n"
         "Entry point address:               0x%" PRIx64 "\n"
-        "Start of program headers:          0x%" PRIx64 "\n"
-        "Start of section headers:          0x%" PRIx64 "\n"
+        "Start of program headers:          %" PRIu64 "\n"
+        "Start of section headers:          %" PRIu64 "\n"
         "Flags:                             0x%" PRIx32 "\n"
         "Size of this header:               %u (bytes)\n"
         "Size of program headers:           %u (bytes)\n"
@@ -421,12 +354,113 @@ static int _elf_dump_header(FILE* io, const elf_header_t* header)
         (unsigned)header->e_shstrndx);
 }
 
+int elf_parser_file_header(elf_file_header_t* dst, const void* addr)
+{
+    const uint8_t* pdat = addr;
+    size_t pos = 0;
+
+    const uint8_t magic_header[4] = { 0x7f, 0x45, 0x4c, 0x46 };
+    if (memcmp(addr, magic_header, sizeof(magic_header)) != 0)
+    {
+        return -1;
+    }
+
+    /* EI_MAG */
+    memcpy(dst->f_EI_MAG, magic_header, sizeof(magic_header));
+    pos += 4;
+
+    dst->f_EI_CLASS = pdat[pos++];
+    if (dst->f_EI_CLASS != 1 && dst->f_EI_CLASS != 2)
+    {
+        return -1;
+    }
+
+    dst->f_EI_DATA = pdat[pos++];
+    if (dst->f_EI_DATA != 1 && dst->f_EI_DATA != 2)
+    {
+        return -1;
+    }
+
+    dst->f_EI_VERSION = pdat[pos++];
+    dst->f_EI_OSABI = pdat[pos++];
+    dst->f_EI_ABIVERSION = pdat[pos++];
+    memcpy(dst->f_EI_PAD, &pdat[pos], sizeof(dst->f_EI_PAD));
+    pos += 7;
+
+    dst->e_type = _elf_parser_16bit(&pdat[pos], dst->f_EI_DATA);
+    LOG("%p", &pdat[pos]);
+    pos += 2;
+
+    dst->e_machine = _elf_parser_16bit(&pdat[pos], dst->f_EI_DATA);
+    pos += 2;
+
+    dst->e_version = _elf_parser_32bit(&pdat[pos], dst->f_EI_DATA);
+    pos += 4;
+
+    if (dst->f_EI_CLASS == 1)
+    {
+        dst->e_entry = _elf_parser_32bit(&pdat[pos], dst->f_EI_DATA);
+        pos += 4;
+        dst->e_phoff = _elf_parser_32bit(&pdat[pos], dst->f_EI_DATA);
+        pos += 4;
+        dst->e_shoff = _elf_parser_32bit(&pdat[pos], dst->f_EI_DATA);
+        pos += 4;
+    }
+    else
+    {
+        dst->e_entry = _elf_parser_64bit(&pdat[pos], dst->f_EI_DATA);
+        pos += 8;
+        dst->e_phoff = _elf_parser_64bit(&pdat[pos], dst->f_EI_DATA);
+        pos += 8;
+        dst->e_shoff = _elf_parser_64bit(&pdat[pos], dst->f_EI_DATA);
+        pos += 8;
+    }
+
+    dst->e_flags = _elf_parser_32bit(&pdat[pos], dst->f_EI_DATA);
+    pos += 4;
+
+    dst->e_ehsize = _elf_parser_16bit(&pdat[pos], dst->f_EI_DATA);
+    pos += 2;
+
+    dst->e_phentsize = _elf_parser_16bit(&pdat[pos], dst->f_EI_DATA);
+    pos += 2;
+
+    dst->e_phnum = _elf_parser_16bit(&pdat[pos], dst->f_EI_DATA);
+    pos += 2;
+
+    dst->e_shentsize = _elf_parser_16bit(&pdat[pos], dst->f_EI_DATA);
+    pos += 2;
+
+    dst->e_shnum = _elf_parser_16bit(&pdat[pos], dst->f_EI_DATA);
+    pos += 2;
+
+    dst->e_shstrndx = _elf_parser_16bit(&pdat[pos], dst->f_EI_DATA);
+    pos += 2;
+
+    return 0;
+}
+
+int elf_parser_program_header(elf_program_header_t* dst,
+    const elf_file_header_t* header, const void* addr, size_t idx)
+{
+    if (header->f_EI_CLASS == 1)
+    {
+        return _elf_parser_program32_header(dst, header, addr, idx);
+    }
+    else if (header->f_EI_CLASS == 2)
+    {
+        return _elf_parser_program64_header(dst, header, addr, idx);
+    }
+
+    return -1;
+}
+
 int elf_dump(FILE* io, const void* addr)
 {
     int ret;
 
-    elf_header_t header;
-    if ((ret = elf_parser_header(&header, addr)) < 0)
+    elf_file_header_t header;
+    if ((ret = elf_parser_file_header(&header, addr)) < 0)
     {
         return ret;
     }
