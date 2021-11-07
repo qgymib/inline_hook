@@ -222,109 +222,10 @@ typedef struct elf_program_header
     uint64_t p_align;
 }elf_program_header_t;
 
-typedef struct elf_section_header_32
+typedef struct elf_section_header
 {
     /**
-     * An offset to a string in the .shstrtab section that represents the name of this section.
-     */
-    uint32_t sh_name;
-
-    /**
-     * @brief Identifies the type of this header.
-     * |Value      | Name              | Meaning                           |
-     * | --------- | ----------------- | --------------------------------- |
-     * |0x0        | SHT_NULL          | Section header table entry unused |
-     * |0x1        | SHT_PROGBITS      | Program data                      |
-     * |0x2        | SHT_SYMTAB        | Symbol table                      |
-     * |0x3        | SHT_STRTAB        | String table                      |
-     * |0x4        | SHT_RELA          | Relocation entries with addends   |
-     * |0x5        | SHT_HASH          | Symbol hash table                 |
-     * |0x6        | SHT_DYNAMIC       | Dynamic linking information       |
-     * |0x7        | SHT_NOTE          | Notes                             |
-     * |0x8        | SHT_NOBITS        | Program space with no data (bss)  |
-     * |0x9        | SHT_REL           | Relocation entries, no addends    |
-     * |0x0A       | SHT_SHLIB         | Reserved                          |
-     * |0x0B       | SHT_DYNSYM        | Dynamic linker symbol table       |
-     * |0x0E       | SHT_INIT_ARRAY    | Array of constructors             |
-     * |0x0F       | SHT_FINI_ARRAY    | Array of destructors              |
-     * |0x10       | SHT_PREINIT_ARRAY | Array of pre-constructors         |
-     * |0x11       | SHT_GROUP         | Section group                     |
-     * |0x12       | SHT_SYMTAB_SHNDX  | Extended section indices          |
-     * |0x13       | SHT_NUM           | Number of defined types.          |
-     * |0x60000000 | SHT_LOOS          | Start OS-specific.                |
-     * |...    ... | ...               | ...                               |
-     */
-    uint32_t sh_type;
-
-    /**
-     * @brief Identifies the attributes of the section.
-     * | Value         | Name                  | Meaning                                                      |
-     * | ------------- | --------------------- | ------------------------------------------------------------ |
-     * | 0x1           | SHF_WRITE             | Writable                                                     |
-     * | 0x2           | SHF_ALLOC             | Occupies memory during execution                             |
-     * | 0x4           | SHF_EXECINSTR         | Executable                                                   |
-     * | 0x10          | SHF_MERGE             | Might be merged                                              |
-     * | 0x20          | SHF_STRINGS           | Contains null-terminated strings                             |
-     * | 0x40          | SHF_INFO_LINK         | 'sh_info' contains SHT index                                 |
-     * | 0x80          | SHF_LINK_ORDER        | Preserve order after combining                               |
-     * | 0x100         | SHF_OS_NONCONFORMING  | Non-standard OS specific handling required                   |
-     * | 0x200         | SHF_GROUP             | Section is member of a group                                 |
-     * | 0x400         | SHF_TLS               | Section hold thread-local data                               |
-     * | 0x0ff00000    | SHF_MASKOS            | OS-specific                                                  |
-     * | 0xf0000000    | SHF_MASKPROC          | Processor-specific                                           |
-     * | 0x4000000     | SHF_ORDERED           | Special ordering requirement (Solaris)                       |
-     * | 0x8000000     | SHF_EXCLUDE           | Section is excluded unless referenced or allocated (Solaris) |
-     */
-    uint32_t sh_flags;
-
-    /**
-     * Virtual address of the section in memory, for sections that are loaded.
-     */
-    uint32_t sh_addr;
-
-    /**
-     * Offset of the section in the file image.
-     */
-    uint32_t sh_offset;
-
-    /**
-     * Size in bytes of the section in the file image. May be 0.
-     */
-    uint32_t sh_size;
-
-    /**
-     * @brief Contains the section index of an associated section.
-     * 
-     * This field is used for several purposes, depending on the type of section.
-     */
-    uint32_t sh_link;
-
-    /**
-     * @brief Contains extra information about the section.
-     * 
-     * This field is used for several purposes, depending on the type of section.
-     */
-    uint32_t sh_info;
-
-    /**
-     * @brief Contains the required alignment of the section.
-     *
-     * This field must be a power of two.
-     */
-    uint32_t sh_addralign;
-
-    /**
-     * @brief Contains the size, in bytes, of each entry, for sections that contain fixed-size entries.
-     *
-     * Otherwise, this field contains zero.
-     */
-    uint32_t sh_entsize;
-}elf_section_header_32_t;
-
-typedef struct elf_section_header_64
-{
-    /**
-     * An offset to a string in the .shstrtab section that represents the name of this section.
+     * An offset to a string in the `.shstrtab` section that represents the name of this section.
      */
     uint32_t sh_name;
 
@@ -418,7 +319,7 @@ typedef struct elf_section_header_64
      * Otherwise, this field contains zero.
      */
     uint64_t sh_entsize;
-}elf_section_header_64_t;
+}elf_section_header_t;
 
 /**
  * @brief Parser ELF file header
@@ -430,13 +331,24 @@ int elf_parser_file_header(elf_file_header_t* dst, const void* addr);
 
 /**
  * @brief Parser program header
- * @param[out] dst Program header
+ * @param[out] dst      Program header
  * @param[in] header    File header
  * @param[in] addr      The same value as #elf_parser_file_header()
  * @param[in] idx       Which header you want to parser
  * @return              Result
  */
 int elf_parser_program_header(elf_program_header_t* dst,
+    const elf_file_header_t* header, const void* addr, size_t idx);
+
+/**
+ * @brief Parser section header
+ * @param[out] dst      Section header
+ * @param[in] header    File header
+ * @param[in] addr      The same value as #elf_parser_file_header()
+ * @param[in] idx       Which header you want to parser
+ * @return              Result
+ */
+int elf_parser_section_header(elf_section_header_t* dst,
     const elf_file_header_t* header, const void* addr, size_t idx);
 
 /**
