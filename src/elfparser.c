@@ -354,6 +354,45 @@ static int _elf_dump_header(FILE* io, const elf_file_header_t* header)
         (unsigned)header->e_shstrndx);
 }
 
+static const char* _elf_dump_program_header_get_type(uint32_t p_type)
+{
+    switch (p_type)
+    {
+    case 0x00000000:    return "NULL";
+    case 0x00000001:    return "LOAD";
+    case 0x00000002:    return "DYNAMIC";
+    case 0x00000003:    return "INTERP";
+    case 0x00000004:    return "NOTE";
+    case 0x00000005:    return "SHLIB";
+    case 0x00000006:    return "PHDR";
+    case 0x00000007:    return "TLS";
+    case 0x60000000:    return "LOOS";
+    case 0x6474e550:    return "GNU_EH_FRAME";
+    case 0x6474e551:    return "GNU_STACK";
+    case 0x6474e552:    return "GNU_RELRO";
+    case 0x6FFFFFFF:    return "HIOS";
+    case 0x70000000:    return "LOPROC";
+    case 0x7FFFFFFF:    return "HIPROC";
+    default:            return "[Unknown]";
+    }
+}
+
+static int _elf_dump_program_header(FILE* io, const elf_program_header_t* program_hdr, int is_64bit)
+{
+    const int ptr_width = is_64bit ? 16 : 8;
+
+    return fprintf(io,
+        "%-*s 0x%0*" PRIx64 " 0x%0*" PRIx64 " 0x%0*" PRIx64 " 0x%0*" PRIx64 " 0x%0*" PRIx64 " 0x%0*" PRIx32 " %" PRIu64 "\n",
+        12, _elf_dump_program_header_get_type(program_hdr->p_type),
+        ptr_width, program_hdr->p_offset,
+        ptr_width, program_hdr->p_vaddr,
+        ptr_width, program_hdr->p_paddr,
+        ptr_width, program_hdr->p_filesz,
+        ptr_width, program_hdr->p_memsz,
+        8, program_hdr->p_flags,
+        program_hdr->p_align);
+}
+
 int elf_parser_file_header(elf_file_header_t* dst, const void* addr)
 {
     const uint8_t* pdat = addr;
@@ -388,7 +427,6 @@ int elf_parser_file_header(elf_file_header_t* dst, const void* addr)
     pos += 7;
 
     dst->e_type = _elf_parser_16bit(&pdat[pos], dst->f_EI_DATA);
-    LOG("%p", &pdat[pos]);
     pos += 2;
 
     dst->e_machine = _elf_parser_16bit(&pdat[pos], dst->f_EI_DATA);
@@ -458,11 +496,51 @@ int elf_parser_program_header(elf_program_header_t* dst,
 int elf_dump(FILE* io, const void* addr)
 {
     int ret;
+    int size_written = 0;
 
-    elf_file_header_t header;
-    if ((ret = elf_parser_file_header(&header, addr)) < 0)
+    elf_file_header_t file_hdr;
+    if ((ret = elf_parser_file_header(&file_hdr, addr)) < 0)
     {
         return ret;
     }
-    return _elf_dump_header(io, &header);
+    if ((ret = _elf_dump_header(io, &file_hdr)) < 0)
+    {
+        return ret;
+    }
+    size_written += ret;
+
+    const int str_width = file_hdr.f_EI_CLASS == 2 ? 18 : 10;
+
+    elf_program_header_t program_hdr;
+    size_t idx;
+    if ((ret = fprintf(io, "%-*s %-*s %-*s %-*s %-*s %-*s %-*s %s\n",
+        12, "Type",
+        str_width, "Offset",
+        str_width, "VirtAddr",
+        str_width, "PhysAddr",
+        str_width, "FileSiz",
+        str_width, "MemSiz",
+        10, "Flags",
+        "Align")) < 0)
+    {
+        return ret;
+    }
+    size_written += ret;
+
+    for (idx = 0; idx < file_hdr.e_phnum; idx++)
+    {
+        if ((ret = elf_parser_program_header(&program_hdr, &file_hdr, addr, idx)) < 0)
+        {
+            return ret;
+        }
+
+        if ((ret = _elf_dump_program_header(io, &program_hdr, file_hdr.f_EI_CLASS == 2)) < 0)
+        {
+            return ret;
+        }
+
+        size_written += ret;
+    }
+
+    return size_written;
 }

@@ -185,7 +185,7 @@ typedef struct elf_program_header
     uint32_t p_type;
 
     /**
-     * Segment-dependent flags (position for 64-bit structure).
+     * Segment-dependent flags.
      */
     uint32_t p_flags;
 
@@ -443,7 +443,7 @@ int elf_parser_program_header(elf_program_header_t* dst,
  * @brief Dump ELF information
  * @param[in] io        FILE to store information
  * @param[in] addr      Buffer to parser
- * @return              Result
+ * @return              How many bytes written.
  */
 int elf_dump(FILE* io, const void* addr);
 
