@@ -114,9 +114,13 @@ static uint64_t _elf_parser_64bit(const uint8_t* pdat, int f_EI_DATA)
 }
 
 static int _elf_parser_program32_header(elf_program_header_t* dst,
-    const elf_file_header_t* header, const uint8_t* pdat)
+    const elf_file_header_t* header, const uint8_t* pdat, size_t size)
 {
     size_t pos = 0;
+    if (size < 32)
+    {
+        return -1;
+    }
 
     dst->p_type = _elf_parser_32bit(&pdat[pos], header->f_EI_DATA);
     pos += 4;
@@ -146,9 +150,13 @@ static int _elf_parser_program32_header(elf_program_header_t* dst,
 }
 
 static int _elf_parser_program64_header(elf_program_header_t* dst,
-    const elf_file_header_t* header, const uint8_t* pdat)
+    const elf_file_header_t* header, const uint8_t* pdat, size_t size)
 {
     size_t pos = 0;
+    if (size < 56)
+    {
+        return -1;
+    }
 
     dst->p_type = _elf_parser_32bit(&pdat[pos], header->f_EI_DATA);
     pos += 4;
@@ -382,9 +390,13 @@ static int _elf_dump_program_header(FILE* io, const elf_program_header_t* progra
 }
 
 static int _elf_parser_section32_header(elf_section_header_t* dst,
-    const elf_file_header_t* header, const uint8_t* pdat)
+    const elf_file_header_t* header, const uint8_t* pdat, size_t size)
 {
     size_t pos = 0;
+    if (size < 40)
+    {
+        return -1;
+    }
 
     dst->sh_name = _elf_parser_32bit(&pdat[pos], header->f_EI_DATA);
     pos += 4;
@@ -420,9 +432,13 @@ static int _elf_parser_section32_header(elf_section_header_t* dst,
 }
 
 static int _elf_parser_section64_header(elf_section_header_t* dst,
-    const elf_file_header_t* header, const uint8_t* pdat)
+    const elf_file_header_t* header, const uint8_t* pdat, size_t size)
 {
     size_t pos = 0;
+    if (size < 64)
+    {
+        return -1;
+    }
 
     dst->sh_name = _elf_parser_32bit(&pdat[pos], header->f_EI_DATA);
     pos += 4;
@@ -457,10 +473,16 @@ static int _elf_parser_section64_header(elf_section_header_t* dst,
     return 0;
 }
 
-int elf_parser_file_header(elf_file_header_t* dst, const void* addr)
+int elf_parser_file_header(elf_file_header_t* dst, const void* addr, size_t size)
 {
     const uint8_t* pdat = addr;
     size_t pos = 0;
+
+    /* 32bit ELF file header size */
+    if (size < 52)
+    {
+        return -1;
+    }
 
     const uint8_t magic_header[4] = { 0x7f, 0x45, 0x4c, 0x46 };
     if (memcmp(addr, magic_header, sizeof(magic_header)) != 0)
@@ -474,6 +496,12 @@ int elf_parser_file_header(elf_file_header_t* dst, const void* addr)
 
     dst->f_EI_CLASS = pdat[pos++];
     if (dst->f_EI_CLASS != 1 && dst->f_EI_CLASS != 2)
+    {
+        return -1;
+    }
+
+    /* 64bit ELF file header size */
+    if (dst->f_EI_CLASS == 2 && size < 64)
     {
         return -1;
     }
@@ -543,41 +571,45 @@ int elf_parser_file_header(elf_file_header_t* dst, const void* addr)
 }
 
 int elf_parser_program_header(elf_program_header_t* dst,
-    const elf_file_header_t* header, const void* addr, size_t idx)
+    const elf_file_header_t* header, const void* addr, size_t size, size_t idx)
 {
+    const uint8_t* max_pdat_pos = (uint8_t*)addr + size;
     const uint8_t* pdat = (uint8_t*)addr + header->e_phoff + idx * header->e_phentsize;
-    if (idx >= header->e_phnum)
+    if (idx >= header->e_phnum || pdat >= max_pdat_pos)
     {
         return -1;
     }
 
+    size_t left_size = max_pdat_pos - pdat;
     if (header->f_EI_CLASS == 1)
     {
-        return _elf_parser_program32_header(dst, header, pdat);
+        return _elf_parser_program32_header(dst, header, pdat, left_size);
     }
     else if (header->f_EI_CLASS == 2)
     {
-        return _elf_parser_program64_header(dst, header, pdat);
+        return _elf_parser_program64_header(dst, header, pdat, left_size);
     }
     return -1;
 }
 
 int elf_parser_section_header(elf_section_header_t* dst,
-    const elf_file_header_t* header, const void* addr, size_t idx)
+    const elf_file_header_t* header, const void* addr, size_t size, size_t idx)
 {
+    const uint8_t* max_pdat_pos = (uint8_t*)addr + size;
     const uint8_t* pdat = (uint8_t*)addr + header->e_shoff + idx * header->e_shentsize;
-    if (idx >= header->e_shnum)
+    if (idx >= header->e_shnum || pdat >= max_pdat_pos)
     {
         return -1;
     }
 
+    size_t left_size = max_pdat_pos - pdat;
     if (header->f_EI_CLASS == 1)
     {
-        return _elf_parser_section32_header(dst, header, pdat);
+        return _elf_parser_section32_header(dst, header, pdat, left_size);
     }
     else if (header->f_EI_CLASS == 2)
     {
-        return _elf_parser_section64_header(dst, header, pdat);
+        return _elf_parser_section64_header(dst, header, pdat, left_size);
     }
     return -1;
 }
@@ -586,25 +618,25 @@ static const char* _elf_dump_secion_header_get_type(uint32_t sh_type)
 {
     switch (sh_type)
     {
-	case 0x0:           return "NULL";
-	case 0x1:           return "PROGBITS";
-	case 0x2:           return "SYMTAB";
-	case 0x3:           return "STRTAB";
-	case 0x4:           return "RELA";
-	case 0x5:           return "HASH";
-	case 0x6:           return "DYNAMIC";
-	case 0x7:           return "NOTE";
-	case 0x8:           return "NOBITS";
-	case 0x9:           return "REL";
-	case 0x0A:          return "SHLIB";
-	case 0x0B:          return "DYNSYM";
-	case 0x0E:          return "INIT_ARRAY";
-	case 0x0F:          return "FINI_ARRAY";
-	case 0x10:          return "PREINIT_ARRAY";
-	case 0x11:          return "GROUP";
-	case 0x12:          return "SYMTAB_SHNDX";
-	case 0x13:          return "NUM";
-	case 0x60000000:    return "LOOS";
+    case 0x0:           return "NULL";
+    case 0x1:           return "PROGBITS";
+    case 0x2:           return "SYMTAB";
+    case 0x3:           return "STRTAB";
+    case 0x4:           return "RELA";
+    case 0x5:           return "HASH";
+    case 0x6:           return "DYNAMIC";
+    case 0x7:           return "NOTE";
+    case 0x8:           return "NOBITS";
+    case 0x9:           return "REL";
+    case 0x0A:          return "SHLIB";
+    case 0x0B:          return "DYNSYM";
+    case 0x0E:          return "INIT_ARRAY";
+    case 0x0F:          return "FINI_ARRAY";
+    case 0x10:          return "PREINIT_ARRAY";
+    case 0x11:          return "GROUP";
+    case 0x12:          return "SYMTAB_SHNDX";
+    case 0x13:          return "NUM";
+    case 0x60000000:    return "LOOS";
     default:            return "[Unknown]";
     }
 }
@@ -627,14 +659,14 @@ static int _elf_dump_section_header(FILE* io, const elf_section_header_t* sectio
         ptr_width, section_hdr->sh_entsize);
 }
 
-int elf_dump(FILE* io, const void* addr)
+int elf_dump_buffer(FILE* io, const void* buffer, size_t size)
 {
     int ret;
     size_t idx;
     int size_written = 0;
 
     elf_file_header_t file_hdr;
-    if ((ret = elf_parser_file_header(&file_hdr, addr)) < 0)
+    if ((ret = elf_parser_file_header(&file_hdr, buffer, size)) < 0)
     {
         return ret;
     }
@@ -663,7 +695,7 @@ int elf_dump(FILE* io, const void* addr)
 
     for (idx = 0; idx < file_hdr.e_phnum; idx++)
     {
-        if ((ret = elf_parser_program_header(&program_hdr, &file_hdr, addr, idx)) < 0)
+        if ((ret = elf_parser_program_header(&program_hdr, &file_hdr, buffer, size, idx)) < 0)
         {
             return ret;
         }
@@ -676,7 +708,7 @@ int elf_dump(FILE* io, const void* addr)
     }
 
     elf_section_header_t shstrtab_hdr;
-    if ((ret = elf_parser_section_header(&shstrtab_hdr, &file_hdr, addr, file_hdr.e_shstrndx)) < 0)
+    if ((ret = elf_parser_section_header(&shstrtab_hdr, &file_hdr, buffer, size, file_hdr.e_shstrndx)) < 0)
     {
         return ret;
     }
@@ -684,7 +716,7 @@ int elf_dump(FILE* io, const void* addr)
     elf_section_header_t section_hdr;
     for (idx = 0; idx < file_hdr.e_shnum; idx++)
     {
-        if ((ret = elf_parser_section_header(&section_hdr, &file_hdr, addr, idx)) < 0)
+        if ((ret = elf_parser_section_header(&section_hdr, &file_hdr, buffer, size, idx)) < 0)
         {
             return ret;
         }

@@ -325,39 +325,43 @@ typedef struct elf_section_header
  * @brief Parser ELF file header
  * @param[out] dst  File header information
  * @param[in] addr  Buffer to parser
+ * @param[in] size  Length of buffer
  * @return          Result
  */
-int elf_parser_file_header(elf_file_header_t* dst, const void* addr);
+int elf_parser_file_header(elf_file_header_t* dst, const void* addr, size_t size);
 
 /**
  * @brief Parser program header
  * @param[out] dst      Program header
  * @param[in] header    File header
  * @param[in] addr      The same value as #elf_parser_file_header()
+ * @param[in] size      The same value as #elf_parser_file_header()
  * @param[in] idx       Which header you want to parser
  * @return              Result
  */
 int elf_parser_program_header(elf_program_header_t* dst,
-    const elf_file_header_t* header, const void* addr, size_t idx);
+    const elf_file_header_t* header, const void* addr, size_t size, size_t idx);
 
 /**
  * @brief Parser section header
  * @param[out] dst      Section header
  * @param[in] header    File header
  * @param[in] addr      The same value as #elf_parser_file_header()
+ * @param[in] size      The same value as #elf_parser_file_header()
  * @param[in] idx       Which header you want to parser
  * @return              Result
  */
 int elf_parser_section_header(elf_section_header_t* dst,
-    const elf_file_header_t* header, const void* addr, size_t idx);
+    const elf_file_header_t* header, const void* addr, size_t size, size_t idx);
 
 /**
  * @brief Dump ELF information
  * @param[in] io        FILE to store information
- * @param[in] addr      Buffer to parser
+ * @param[in] buffer    Buffer to parser
+ * @param[in] size      Buffer size
  * @return              How many bytes written.
  */
-int elf_dump(FILE* io, const void* addr);
+int elf_dump_buffer(FILE* io, const void* buffer, size_t size);
 
 #ifdef __cplusplus
 }

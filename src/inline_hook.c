@@ -492,7 +492,7 @@ static int _x86_64_elf(struct dl_phdr_info* info, size_t size, void* data)
             void* elf_addr = (void*)(info->dlpi_addr + info->dlpi_phdr[j].p_vaddr);
             LOG("executable loaded at %p", elf_addr);
             dump_hex(elf_addr, sizeof(elf_file_header_t), 16);
-            elf_dump(stdout, elf_addr);
+            elf_dump_buffer(stdout, elf_addr, (size_t)-1);
 			break;
 		}
 	}
