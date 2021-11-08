@@ -1,6 +1,4 @@
 #include "inline_hook.h"
-#define _GNU_SOURCE
-#include <link.h>
 #include <stdlib.h>
 
 #include <assert.h>
@@ -473,36 +471,16 @@ static int _x86_64_generate_trampoline_opcode(x86_64_trampoline_t* handle)
     return 0;
 }
 
-static int _x86_64_elf(struct dl_phdr_info* info, size_t size, void* data)
-{
-    (void)size;
-
-	int j;
-    int* p_ret = data;
-
-	if (*p_ret) return 0;
-	*p_ret = 1;
-
-    LOG("relocation: 0x%lx", (long)info->dlpi_addr);
-
-	for (j = 0; j < info->dlpi_phnum; j++)
-    {
-		if (info->dlpi_phdr[j].p_type == PT_LOAD)
-        {
-            void* elf_addr = (void*)(info->dlpi_addr + info->dlpi_phdr[j].p_vaddr);
-            LOG("executable loaded at %p", elf_addr);
-            dump_hex(elf_addr, sizeof(elf_file_header_t), 16);
-            elf_dump_buffer(stdout, elf_addr, (size_t)-1);
-			break;
-		}
-	}
-	return 0;
-}
-
 static int _x86_64_inline_hook_inject(void** origin, void* target, void* detour)
 {
-    int ret = 0;
-    dl_iterate_phdr(_x86_64_elf, &ret);
+    int ret;
+    {
+        FILE* f_exe = fopen("/proc/self/exe", "rb");
+        assert(f_exe != NULL);
+        ret = elf_dump_file(stdout, f_exe);
+        assert(ret > 0);
+        fclose(f_exe);
+    }
 
     size_t page_size = _get_page_size();
     x86_64_trampoline_t* handle = _alloc_execute_memory(page_size);

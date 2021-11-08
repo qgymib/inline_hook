@@ -326,7 +326,7 @@ typedef struct elf_section_header
  * @param[out] dst  File header information
  * @param[in] addr  Buffer to parser
  * @param[in] size  Length of buffer
- * @return          Result
+ * @return          How many bytes read
  */
 int elf_parser_file_header(elf_file_header_t* dst, const void* addr, size_t size);
 
@@ -355,13 +355,21 @@ int elf_parser_section_header(elf_section_header_t* dst,
     const elf_file_header_t* header, const void* addr, size_t size, size_t idx);
 
 /**
- * @brief Dump ELF information
- * @param[in] io        FILE to store information
+ * @brief Dump ELF information from buffer
+ * @param[in] io        File to store information
  * @param[in] buffer    Buffer to parser
  * @param[in] size      Buffer size
  * @return              How many bytes written.
  */
 int elf_dump_buffer(FILE* io, const void* buffer, size_t size);
+
+/**
+ * @brief Dump ELF information from file
+ * @param[in] io        File to store information
+ * @param[in] src       File to parser ELF information
+ * @return              How many bytes written.
+ */
+int elf_dump_file(FILE* io, FILE* src);
 
 #ifdef __cplusplus
 }
