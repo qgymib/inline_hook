@@ -471,16 +471,21 @@ static int _x86_64_generate_trampoline_opcode(x86_64_trampoline_t* handle)
     return 0;
 }
 
+static void _x86_64_dump_info(void)
+{
+	elf_info_t* info;
+	FILE* f_exe = fopen("/proc/self/exe", "rb");
+
+	assert(elf_parser_file(&info, f_exe) == 0);
+	elf_dump_info(stdout, info);
+    elf_info_destroy(info);
+	fclose(f_exe);
+}
+
 static int _x86_64_inline_hook_inject(void** origin, void* target, void* detour)
 {
     int ret;
-    {
-        FILE* f_exe = fopen("/proc/self/exe", "rb");
-        assert(f_exe != NULL);
-        ret = elf_dump_file(stdout, f_exe);
-        assert(ret > 0);
-        fclose(f_exe);
-    }
+    _x86_64_dump_info();
 
     size_t page_size = _get_page_size();
     x86_64_trampoline_t* handle = _alloc_execute_memory(page_size);

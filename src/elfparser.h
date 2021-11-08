@@ -321,6 +321,43 @@ typedef struct elf_section_header
     uint64_t sh_entsize;
 }elf_section_header_t;
 
+enum elf_source_type
+{
+    ELF_SOURCE_POSIX_FILE,
+    ELF_SOURCE_BUFFER,
+};
+
+typedef struct elf_info
+{
+    elf_file_header_t           file_hdr;       /**< File header */
+    elf_program_header_t*       program_hdr;    /**< A list of program header */
+    elf_section_header_t*       section_hdr;    /**< A list of section header */
+
+    struct 
+    {
+        enum elf_source_type    source_type;    /**< Source type */
+        union
+        {
+            FILE*               as_file;        /**< For #ELF_SOURCE_POSIX_FILE */
+            void*               as_buffer;      /**< For #ELF_SOURCE_BUFFER */
+        }source;
+    }data;
+}elf_info_t;
+
+/**
+ * @brief Parser ELF information from file
+ * @param[out] dst  Where to store information.
+ * @param[in] file  File to parser
+ * @return          Result
+ */
+int elf_parser_file(elf_info_t** dst, FILE* file);
+
+/**
+ * @brief Destroy #elf_info_t
+ * @param[in] info  Object to destroy
+ */
+void elf_info_destroy(elf_info_t* info);
+
 /**
  * @brief Parser ELF file header
  * @param[out] dst  File header information
@@ -364,12 +401,12 @@ int elf_parser_section_header(elf_section_header_t* dst,
 int elf_dump_buffer(FILE* io, const void* buffer, size_t size);
 
 /**
- * @brief Dump ELF information from file
+ * @brief Dump ELF information
  * @param[in] io        File to store information
- * @param[in] src       File to parser ELF information
+ * @param[in] info      ELF information
  * @return              How many bytes written.
  */
-int elf_dump_file(FILE* io, FILE* src);
+int elf_dump_info(FILE* io, const elf_info_t* info);
 
 #ifdef __cplusplus
 }

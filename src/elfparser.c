@@ -1,5 +1,6 @@
 #include "elfparser.h"
 #include <string.h>
+#include <stdlib.h>
 
 #if __BYTE_ORDER == __LITTLE_ENDIAN
 #   define HOST_EI_DATA 1
@@ -569,56 +570,32 @@ static int _elf_dump_print_program_title(FILE* io, uint8_t f_EI_CLASS)
         "[Align]");
 }
 
-static int _elf_dump_file_file_header(FILE* io, FILE* src, elf_file_header_t* file_hdr)
+static int _elf_parser_file_header_from_file(elf_file_header_t* dst, FILE* src)
 {
-    int ret;
     uint8_t cache[ELF_FILE_HEADER_64_SIZE];
+    
+    if (fseek(src, 0, SEEK_SET) != 0)
+    {
+        return -1;
+    }
 
     size_t read_size = fread(cache, 1, ELF_FILE_HEADER_64_SIZE, src);
-    if ((ret = elf_parser_file_header(file_hdr, cache, read_size)) < 0)
-    {
-        return ret;
-    }
-    return _elf_dump_header(io, file_hdr);
+    return elf_parser_file_header(dst, cache, read_size);
 }
 
-static int _elf_dump_file_program_header(FILE* io, FILE* src, elf_file_header_t* file_hdr)
+static int _elf_parser_program_header_from_file(elf_program_header_t* dst,
+    FILE* file, const elf_file_header_t* file_hdr, size_t idx)
 {
-    int ret;
-    size_t idx;
     uint8_t cache[ELF_PROGRAM_HEADER_64_SIZE];
+    size_t target_pos = file_hdr->e_phoff + idx * file_hdr->e_phentsize;
 
-    int written_size = 0;
-    if ((ret = _elf_dump_print_program_title(io, file_hdr->f_EI_CLASS)) < 0)
+    if (fseek(file, target_pos, SEEK_SET) != 0)
     {
-        return ret;
-    }
-    written_size += ret;
-
-    elf_program_header_t program_hdr;
-    for (idx = 0; idx < file_hdr->e_phnum; idx++)
-    {
-        size_t target_pos = file_hdr->e_phoff + idx * file_hdr->e_phentsize;
-        if (fseek(src, target_pos, SEEK_SET) != 0)
-        {
-            return -1;
-        }
-
-        size_t read_size = fread(cache, 1, file_hdr->e_phentsize, src);
-
-        if (_elf_parser_program_header_ext(&program_hdr, file_hdr, cache, read_size) < 0)
-        {
-            return -1;
-        }
-
-        if ((ret = _elf_dump_program_header(io, &program_hdr, file_hdr->f_EI_CLASS == 2)) < 0)
-        {
-            return ret;
-        }
-        written_size += ret;
+        return -1;
     }
 
-    return written_size;
+    size_t read_size = fread(cache, 1, file_hdr->e_phentsize, file);
+    return _elf_parser_program_header_ext(dst, file_hdr, cache, read_size);
 }
 
 static int _elf_dump_print_section_title(FILE* io, uint8_t f_EI_CLASS)
@@ -639,42 +616,18 @@ static int _elf_dump_print_section_title(FILE* io, uint8_t f_EI_CLASS)
         str_width, "[sh_entsize]");
 }
 
-static int _elf_dump_file_section_header(FILE* io, FILE* src, elf_file_header_t* file_hdr)
+static int _elf_parser_section_header_from_file(elf_section_header_t* dst, FILE* file,
+    const elf_file_header_t* file_hdr, size_t idx)
 {
-    int ret;
-    size_t idx;
     uint8_t cache[ELF_SECTION_HEADER_64_SIZE];
-    elf_section_header_t section_hdr;
-
-    int written_size = 0;
-    if ((ret = _elf_dump_print_section_title(io, file_hdr->f_EI_CLASS)) < 0)
+    size_t target_pos = file_hdr->e_shoff + idx * file_hdr->e_shentsize;
+    if (fseek(file, target_pos, SEEK_SET) != 0)
     {
-        return ret;
-    }
-    written_size += ret;
-
-    for (idx = 0; idx < file_hdr->e_shnum; idx++)
-    {
-        size_t target_pos = file_hdr->e_shoff + idx * file_hdr->e_shentsize;
-        if (fseek(src, target_pos, SEEK_SET) != 0)
-        {
-            return -1;
-        }
-
-        size_t read_size = fread(cache, 1, file_hdr->e_shentsize, src);
-        if ((ret = _elf_parser_section_header_ext(&section_hdr, file_hdr, cache, read_size)) < 0)
-        {
-            return ret;
-        }
-
-        if ((ret = _elf_dump_section_header(io, &section_hdr, file_hdr->f_EI_CLASS == 2)) < 0)
-        {
-            return ret;
-        }
-        written_size += ret;
+        return -1;
     }
 
-    return written_size;
+    size_t read_size = fread(cache, 1, file_hdr->e_shentsize, file);
+    return _elf_parser_section_header_ext(dst, file_hdr, cache, read_size);
 }
 
 int elf_parser_file_header(elf_file_header_t* dst, const void* addr, size_t size)
@@ -864,29 +817,98 @@ int elf_dump_buffer(FILE* io, const void* buffer, size_t size)
     return size_written;
 }
 
-int elf_dump_file(FILE* io, FILE* src)
+int elf_parser_file(elf_info_t** dst, FILE* file)
 {
     int ret;
-    int written_size = 0;
-    
+    size_t idx;
+
     elf_file_header_t file_hdr;
-    if ((ret = _elf_dump_file_file_header(io, src, &file_hdr)) < 0)
+    if ((ret = _elf_parser_file_header_from_file(&file_hdr, file)) < 0)
+    {
+        return ret;
+    }
+
+    elf_info_t* info = malloc(sizeof(elf_info_t) + sizeof(elf_program_header_t) * file_hdr.e_phnum
+        + sizeof(elf_section_header_t) * file_hdr.e_shnum);
+    if (info == NULL)
+    {
+        return -1;
+    }
+    memcpy(&info->file_hdr, &file_hdr, sizeof(file_hdr));
+    info->data.source_type = ELF_SOURCE_POSIX_FILE;
+    info->data.source.as_file = file;
+
+    info->program_hdr = (elf_program_header_t*)((uint8_t*)info + sizeof(elf_info_t));
+    for (idx = 0; idx < file_hdr.e_phnum; idx++)
+    {
+        if ((ret = _elf_parser_program_header_from_file(&info->program_hdr[idx], file, &file_hdr, idx)) < 0)
+        {
+            free(info);
+            return ret;
+        }
+    }
+
+    info->section_hdr = (elf_section_header_t*)((uint8_t*)info + sizeof(elf_info_t) +
+        sizeof(elf_program_header_t) * file_hdr.e_phnum);
+    for (idx = 0; idx < file_hdr.e_shnum; idx++)
+    {
+        if ((ret = _elf_parser_section_header_from_file(&info->section_hdr[idx], file, &file_hdr, idx)) < 0)
+        {
+            free(info);
+            return ret;
+        }
+    }
+
+    *dst = info;
+    return ret;
+}
+
+int elf_dump_info(FILE* io, const elf_info_t* info)
+{
+    int ret;
+    size_t idx;
+    int written_size = 0;
+
+    if ((ret = _elf_dump_header(io, &info->file_hdr)) < 0)
     {
         return ret;
     }
     written_size += ret;
 
-    if ((ret = _elf_dump_file_program_header(io, src, &file_hdr)) < 0)
+    if ((ret = _elf_dump_print_program_title(io, info->file_hdr.f_EI_CLASS)) < 0)
     {
         return ret;
     }
     written_size += ret;
 
-    if ((ret = _elf_dump_file_section_header(io, src, &file_hdr)) < 0)
+    for (idx = 0; idx < info->file_hdr.e_phnum; idx++)
+    {
+        if ((ret = _elf_dump_program_header(io, &info->program_hdr[idx], info->file_hdr.f_EI_CLASS == 2)) < 0)
+        {
+            return ret;
+        }
+        written_size += ret;
+    }
+
+    if ((ret = _elf_dump_print_section_title(io, info->file_hdr.f_EI_CLASS)) < 0)
     {
         return ret;
     }
     written_size += ret;
+
+    for (idx = 0; idx < info->file_hdr.e_shnum; idx++)
+    {
+        if ((ret = _elf_dump_section_header(io, &info->section_hdr[idx], info->file_hdr.f_EI_CLASS == 2)) < 0)
+        {
+            return ret;
+        }
+        written_size += ret;
+    }
 
     return written_size;
+}
+
+void elf_info_destroy(elf_info_t* info)
+{
+    free(info);
 }
