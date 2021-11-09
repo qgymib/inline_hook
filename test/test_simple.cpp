@@ -2,6 +2,7 @@
 
 typedef int(*fn_sig)(int, int);
 
+DISABLE_OPTIMIZE
 static int add(int a, int b)
 {
 	return a + b;

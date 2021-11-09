@@ -8,6 +8,7 @@ static int _callback_square(int num)
     return num * num;
 }
 
+DISABLE_OPTIMIZE
 static int add(int a, int b, fn_callback cb)
 {
     return cb(a + b);
