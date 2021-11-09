@@ -5,3 +5,4 @@ function(ADD_TEST_CASE name)
 endfunction()
 
 ADD_TEST_CASE(test_simple)
+ADD_TEST_CASE(test_callback)
