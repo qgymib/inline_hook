@@ -93,8 +93,12 @@ static size_t _get_function_size(const void* addr)
     uintptr_t relocation = _unix_get_relocation();
     uintptr_t target_addr = (uintptr_t)addr - relocation;
 
-    elf_info_t* info;
-    assert(elf_parser_file(&info, f_exe) == 0);
+    elf_info_t* info = NULL;
+    if (elf_parser_file(&info, f_exe)  != 0)
+    {
+        ret = (size_t)-1;
+        goto fin;
+    }
 
     size_t idx;
     for (idx = 0; idx < info->file_hdr.e_shnum; idx++)
@@ -124,7 +128,11 @@ fin:
         elf_release_symbol(symbol_list);
         symbol_list = NULL;
     }
-    elf_release_info(info);
+    if (info != NULL)
+    {
+        elf_release_info(info);
+        info = NULL;
+    }
     fclose(f_exe);
 
     return ret;
@@ -196,7 +204,7 @@ static int _system_modify_opcode(void* addr, size_t size, void (*callback)(void*
 
     /* Add write protect */
     int ret = _system_protect_as_RE(start_addr, protect_size);
-    assert(ret == 0);
+    assert(ret == 0); (void)ret;
 
     return 0;
 }
