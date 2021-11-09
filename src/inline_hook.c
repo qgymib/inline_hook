@@ -82,6 +82,9 @@ static uintptr_t _unix_get_relocation(void)
     return ret;
 }
 
+/**
+ * @return ((size_t)-1) is failure, otherwise success.
+ */
 static size_t _get_function_size(const void* addr)
 {
     size_t ret = (size_t)-1;
@@ -341,7 +344,17 @@ typedef struct x86_64_trampoline
     uint8_t     trampoline[];                                   /**< Trampoline */
 }x86_64_trampoline_t;
 
-static int _x86_64_is_near_size(ptrdiff_t addr_diff)
+static int _x86_64_is_8bit_size(ptrdiff_t addr_diff)
+{
+    return -128 <= addr_diff && addr_diff <= 127;
+}
+
+static int _x86_64_is_16bit_size(ptrdiff_t addr_diff)
+{
+    return -32768 <= addr_diff && addr_diff <= 32767;
+}
+
+static int _x86_64_is_32bit_size(ptrdiff_t addr_diff)
 {
     return -(ptrdiff_t)2147483648 <= addr_diff && addr_diff <= (ptrdiff_t)2147483647;
 }
@@ -351,9 +364,13 @@ static int _x86_64_is_near_size(ptrdiff_t addr_diff)
  * e9 4_byte_rel_addr
  * ```
  */
-static int _x86_64_fill_jump_code_near(uint8_t jump_code[X86_64_OPCODE_SIZE_JUMP_NEAR], ptrdiff_t addr_diff)
+static int _x86_64_fill_jump_code_near(uint8_t jump_code[X86_64_OPCODE_SIZE_JUMP_NEAR], size_t size, ptrdiff_t addr_diff)
 {
-    assert(_x86_64_is_near_size(addr_diff));
+    assert(_x86_64_is_32bit_size(addr_diff));
+    if (size < X86_64_OPCODE_SIZE_JUMP_NEAR)
+    {
+        return -1;
+    }
 
     jump_code[0] = 0xE9;
     uint32_t code = (uint32_t)(addr_diff - X86_64_OPCODE_SIZE_JUMP_NEAR);
@@ -368,8 +385,13 @@ static int _x86_64_fill_jump_code_near(uint8_t jump_code[X86_64_OPCODE_SIZE_JUMP
  * yo ur ad dr re ss he re     some random assembly
  * ```
  */
-static int _x86_64_fill_jump_code_far(uint8_t jump_code[X86_64_OPCODE_SIZE_JUMP_FAR], void* dst_addr)
+static int _x86_64_fill_jump_code_far(uint8_t jump_code[X86_64_OPCODE_SIZE_JUMP_FAR], size_t size, void* dst_addr)
 {
+    if (size < X86_64_OPCODE_SIZE_JUMP_FAR)
+    {
+        return -1;
+    }
+
     jump_code[0] = 0xff;
     jump_code[1] = 0x25;
     jump_code[2] = 0x00;
@@ -381,12 +403,19 @@ static int _x86_64_fill_jump_code_far(uint8_t jump_code[X86_64_OPCODE_SIZE_JUMP_
     return X86_64_OPCODE_SIZE_JUMP_FAR;
 }
 
-static int _x86_64_fill_jump_code(uint8_t jump_code[X86_64_OPCODE_SIZE_JUMP_FAR], void* src, void* dst)
+/**
+ * @param[in] buffer    Buffer to fill jump code
+ * @param[in] size      Buffer size
+ * @param[in] src_addr  Address of jump code
+ * @param[in] dst_addr  Address of destination
+ * @return              How many bytes written, or -1 if failure.
+ */
+static int _x86_64_fill_jump_code(uint8_t buffer[], size_t size, void* src_addr, void* dst_addr)
 {
-    ptrdiff_t addr_diff = (uint8_t*)dst - (uint8_t*)src;
+    ptrdiff_t addr_diff = (uint8_t*)dst_addr - (uint8_t*)src_addr;
 
-    return _x86_64_is_near_size(addr_diff) ?
-        _x86_64_fill_jump_code_near(jump_code, addr_diff) : _x86_64_fill_jump_code_far(jump_code, dst);
+    return _x86_64_is_32bit_size(addr_diff) ?
+        _x86_64_fill_jump_code_near(buffer, size, addr_diff) : _x86_64_fill_jump_code_far(buffer, size, dst_addr);
 }
 
 static void _x86_64_do_inject(void* arg)
@@ -430,14 +459,136 @@ static ZydisMachineMode _x86_64_get_machine_mode(void)
     }
 }
 
-/**
- * @return  0 - do nothing; 1 - patch success; -1 - patch failure
- */
-static int _x86_64_patch_instruction(x86_64_trampoline_t* handle, x86_64_patch_ctx_t* patch, ZydisDecodedInstruction* insn)
+static unsigned _x86_64_calc_mini_addr_width(ptrdiff_t addr_diff)
 {
-    (void)handle; (void)patch; (void)insn;
-    // TODO
-    return 0;
+    if (_x86_64_is_8bit_size(addr_diff))
+    {
+        return 8;
+    }
+    if (_x86_64_is_16bit_size(addr_diff))
+    {
+        return 16;
+    }
+    if (_x86_64_is_32bit_size(addr_diff))
+    {
+        return 32;
+    }
+    return 64;
+}
+
+static int _86_64_overwrite_jcc_operand(x86_64_trampoline_t* handle, x86_64_patch_ctx_t* patch, const ZydisDecodedInstruction* insn, ptrdiff_t addr_diff)
+{
+    switch (insn->operands[0].size)
+    {
+    case 8:
+        handle->trampoline[patch->pos_insn + 1] = (uint8_t)addr_diff;
+        return 1;
+    case 16:
+    {
+        uint16_t code = (uint16_t)addr_diff;
+        memcpy(&handle->trampoline[patch->pos_insn + 2], &code, sizeof(code));
+        return 1;
+    }
+    case 32:
+    {
+        uint32_t code = (uint32_t)addr_diff;
+        memcpy(&handle->trampoline[patch->pos_insn + 2], &code, sizeof(code));
+        return 1;
+    }
+    default:
+        LOG("unknown operand size(%u)", (unsigned)insn->operands[0].size);
+        return -1;
+    }
+}
+
+static int _x86_64_fix_jcc(x86_64_trampoline_t* handle, x86_64_patch_ctx_t* patch, const ZydisDecodedInstruction* insn)
+{
+    assert(insn->operand_count == 1);
+
+    /* Calculate destination address */
+    ZyanU64 dst_addr;
+    if (!ZYAN_SUCCESS(ZydisCalcAbsoluteAddress(insn, &insn->operands[0],
+        (ZyanU64)&handle->addr_target[patch->pos_insn], &dst_addr)))
+    {
+        return -1;
+    }
+
+    const int b_dst_is_in_body = (uintptr_t)handle->addr_target <= dst_addr
+        && dst_addr <= (uintptr_t)handle->addr_target + handle->size_target;
+
+    /* In most case, jcc destination should inside function body */
+    if (b_dst_is_in_body)
+    {
+        return 0;
+    }
+
+    /*
+     * jcc have three type of operand: rel8 / rel16 / rel32.
+     * We must keep instruction width unchanged.
+     */
+    ptrdiff_t addr_diff = dst_addr - (uintptr_t)&handle->trampoline[patch->pos_insn];
+    unsigned mini_rel_width = _x86_64_calc_mini_addr_width(addr_diff);
+
+    /* If original operand width is large enough, just modify it */
+    if (mini_rel_width <= insn->operands[0].size)
+    {
+        return _86_64_overwrite_jcc_operand(handle, patch, insn, addr_diff);
+    }
+
+    /* If operand width is not enough, we need to build a forward instruction */
+    ptrdiff_t fi_diff = &handle->trampoline[handle->trampoline_size] - &handle->trampoline[patch->pos_insn];
+    /* If we cannot jump to forward instruction, then no magic can be done. */
+    if (_x86_64_calc_mini_addr_width(fi_diff) > insn->operands[0].size)
+    {
+        LOG("too far away from forward instruction: distance is %ld byte(s) but operand only has %u bit",
+            (long)fi_diff, (unsigned)insn->operands[0].size);
+        return -1;
+    }
+
+    /* Build forward instruction */
+    int written_size = _x86_64_fill_jump_code(&handle->trampoline[handle->trampoline_size],
+        handle->trampoline_cap - handle->trampoline_size, &handle->trampoline[handle->trampoline_size], (void*)dst_addr);
+    if (written_size < 0)
+    {
+        return -1;
+    }
+    handle->trampoline_size += written_size;
+
+    return _86_64_overwrite_jcc_operand(handle, patch, insn, fi_diff);
+}
+
+/**
+ * we only need to fix relative address that outside original function body.
+ * @return  0 if do nothing; 1 if patch success; -1 if patch failure
+ */
+static int _x86_64_patch_instruction(x86_64_trampoline_t* handle, x86_64_patch_ctx_t* patch, const ZydisDecodedInstruction* insn)
+{
+#define X86_64_PATCH_JCC(xx)    \
+    case xx: return _x86_64_fix_jcc(handle, patch, insn);
+
+#define X86_64_PATCH_JMP(xx)    \
+    case xx: {\
+        /* TODO */\
+    }\
+    return 1;
+
+#define X86_64_PATCH_CALL(xx)   \
+    case xx: {\
+        /* TODO */\
+    }\
+    return 1;
+
+    switch (insn->mnemonic)
+    {
+    X86_64_JCC_MAP(X86_64_PATCH_JCC)
+    X86_64_JMP_MAP(X86_64_PATCH_JMP)
+    X86_64_CALL_MAP(X86_64_PATCH_CALL)
+    default:    return 0;
+    }
+
+#undef X86_64_PATCH_CALL
+#undef X86_64_PATCH_JMP
+#undef X86_64_PATCH_JCC
 }
 
 /**
@@ -532,7 +683,8 @@ static int _x86_64_inline_hook_inject(void** origin, void* target, void* detour)
     handle->size_target = target_func_size;
     handle->trampoline_cap = malloc_size - sizeof(x86_64_trampoline_t);
 
-    if ((ret = _x86_64_fill_jump_code(handle->redirect_opcode, target, detour)) < 0)
+    if ((ret = _x86_64_fill_jump_code(handle->redirect_opcode,
+        sizeof(handle->redirect_opcode), target, detour)) < 0)
     {
         LOG("generate redirect opcode failed");
         _free_execute_memory(handle);
