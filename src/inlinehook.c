@@ -508,8 +508,6 @@ static int _86_64_overwrite_jmp_operand(x86_64_trampoline_t* handle, x86_64_patc
 static int _x86_64_fix_jcc(x86_64_trampoline_t* handle, x86_64_patch_ctx_t* patch,
     const ZydisDecodedInstruction* insn)
 {
-    assert(insn->operand_count == 1);
-
     /* Calculate destination address */
     ZyanU64 dst_addr;
     if (!ZYAN_SUCCESS(ZydisCalcAbsoluteAddress(insn, &insn->operands[0],
@@ -568,8 +566,6 @@ static int _x86_64_fix_jcc(x86_64_trampoline_t* handle, x86_64_patch_ctx_t* patc
 static int _x86_64_fix_jmp(x86_64_trampoline_t* handle, x86_64_patch_ctx_t* patch,
     const ZydisDecodedInstruction* insn)
 {
-    assert(insn->operand_count == 1);
-
     /**
      * For now I have no idea how to fix ModRM:r/m (r), so it is better to leave it alone.
      */
