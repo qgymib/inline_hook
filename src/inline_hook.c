@@ -584,6 +584,27 @@ static int _x86_64_fix_jmp(x86_64_trampoline_t* handle, x86_64_patch_ctx_t* patc
 }
 
 /**
+ * @see https://www.felixcloutier.com/x86/call
+ */
+static int _x86_64_fix_call(x86_64_trampoline_t* handle, x86_64_patch_ctx_t* patch,
+    const ZydisDecodedInstruction* insn)
+{
+    assert(insn->operand_count == 1);
+
+    /**
+     * For now I have no idea how to fix ModRM:r/m (r), so it is better to leave it alone.
+     */
+    if (insn->operands[0].type == ZYDIS_OPERAND_TYPE_REGISTER
+        || insn->operands[0].type == ZYDIS_OPERAND_TYPE_MEMORY
+        || insn->operands[0].type == ZYDIS_OPERAND_TYPE_POINTER)
+    {
+        return 0;
+    }
+
+    return _x86_64_fix_jcc(handle, patch, insn);
+}
+
+/**
  * we only need to fix relative address that outside original function body.
  * @return  0 if do nothing; 1 if patch success; -1 if patch failure
  */
@@ -597,10 +618,7 @@ static int _x86_64_patch_instruction(x86_64_trampoline_t* handle, x86_64_patch_c
     case xx: return _x86_64_fix_jmp(handle, patch, insn);
 
 #define X86_64_PATCH_CALL(xx)   \
-    case xx: {\
-        /* TODO */\
-    }\
-    return 1;
+    case xx: return _x86_64_fix_call(handle, patch, insn);
 
     switch (insn->mnemonic)
     {
