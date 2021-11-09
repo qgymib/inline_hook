@@ -476,23 +476,24 @@ static unsigned _x86_64_calc_mini_addr_width(ptrdiff_t addr_diff)
     return 64;
 }
 
-static int _86_64_overwrite_jcc_operand(x86_64_trampoline_t* handle, x86_64_patch_ctx_t* patch, const ZydisDecodedInstruction* insn, ptrdiff_t addr_diff)
+static int _86_64_overwrite_jmp_operand(x86_64_trampoline_t* handle, x86_64_patch_ctx_t* patch, const ZydisDecodedInstruction* insn, ptrdiff_t addr_diff)
 {
+    size_t imm_offset = insn->raw.imm[0].offset;
     switch (insn->operands[0].size)
     {
     case 8:
-        handle->trampoline[patch->pos_insn + 1] = (uint8_t)addr_diff;
+        handle->trampoline[patch->pos_insn + imm_offset] = (uint8_t)addr_diff;
         return 1;
     case 16:
     {
         uint16_t code = (uint16_t)addr_diff;
-        memcpy(&handle->trampoline[patch->pos_insn + 2], &code, sizeof(code));
+        memcpy(&handle->trampoline[patch->pos_insn + imm_offset], &code, sizeof(code));
         return 1;
     }
     case 32:
     {
         uint32_t code = (uint32_t)addr_diff;
-        memcpy(&handle->trampoline[patch->pos_insn + 2], &code, sizeof(code));
+        memcpy(&handle->trampoline[patch->pos_insn + imm_offset], &code, sizeof(code));
         return 1;
     }
     default:
@@ -501,7 +502,11 @@ static int _86_64_overwrite_jcc_operand(x86_64_trampoline_t* handle, x86_64_patc
     }
 }
 
-static int _x86_64_fix_jcc(x86_64_trampoline_t* handle, x86_64_patch_ctx_t* patch, const ZydisDecodedInstruction* insn)
+/**
+ * @see https://www.felixcloutier.com/x86/jcc
+ */
+static int _x86_64_fix_jcc(x86_64_trampoline_t* handle, x86_64_patch_ctx_t* patch,
+    const ZydisDecodedInstruction* insn)
 {
     assert(insn->operand_count == 1);
 
@@ -532,7 +537,7 @@ static int _x86_64_fix_jcc(x86_64_trampoline_t* handle, x86_64_patch_ctx_t* patc
     /* If original operand width is large enough, just modify it */
     if (mini_rel_width <= insn->operands[0].size)
     {
-        return _86_64_overwrite_jcc_operand(handle, patch, insn, addr_diff);
+        return _86_64_overwrite_jmp_operand(handle, patch, insn, addr_diff);
     }
 
     /* If operand width is not enough, we need to build a forward instruction */
@@ -554,23 +559,42 @@ static int _x86_64_fix_jcc(x86_64_trampoline_t* handle, x86_64_patch_ctx_t* patc
     }
     handle->trampoline_size += written_size;
 
-    return _86_64_overwrite_jcc_operand(handle, patch, insn, fi_diff);
+    return _86_64_overwrite_jmp_operand(handle, patch, insn, fi_diff);
+}
+
+/**
+ * @see https://www.felixcloutier.com/x86/jmp
+ */
+static int _x86_64_fix_jmp(x86_64_trampoline_t* handle, x86_64_patch_ctx_t* patch,
+	const ZydisDecodedInstruction* insn)
+{
+    assert(insn->operand_count == 1);
+
+    /**
+     * For now I have no idea how to fix ModRM:r/m (r), so it is better to leave it alone.
+     */
+    if (insn->operands[0].type == ZYDIS_OPERAND_TYPE_REGISTER
+        || insn->operands[0].type == ZYDIS_OPERAND_TYPE_MEMORY
+        || insn->operands[0].type == ZYDIS_OPERAND_TYPE_POINTER)
+    {
+        return 0;
+    }
+
+    return _x86_64_fix_jcc(handle, patch, insn);
 }
 
 /**
  * we only need to fix relative address that outside original function body.
  * @return  0 if do nothing; 1 if patch success; -1 if patch failure
  */
-static int _x86_64_patch_instruction(x86_64_trampoline_t* handle, x86_64_patch_ctx_t* patch, const ZydisDecodedInstruction* insn)
+static int _x86_64_patch_instruction(x86_64_trampoline_t* handle, x86_64_patch_ctx_t* patch,
+    const ZydisDecodedInstruction* insn)
 {
 #define X86_64_PATCH_JCC(xx)    \
     case xx: return _x86_64_fix_jcc(handle, patch, insn);
 
 #define X86_64_PATCH_JMP(xx)    \
-    case xx: {\
-        /* TODO */\
-    }\
-    return 1;
+    case xx: return _x86_64_fix_jmp(handle, patch, insn);
 
 #define X86_64_PATCH_CALL(xx)   \
     case xx: {\
