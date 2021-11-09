@@ -7,6 +7,12 @@ extern "C" {
 #include <inttypes.h>
 #include <stdio.h>
 
+enum elf_source_type
+{
+    ELF_SOURCE_POSIX_FILE,
+    ELF_SOURCE_BUFFER,
+};
+
 /**
  * @brief 
  * @see https://en.wikipedia.org/wiki/Executable_and_Linkable_Format
@@ -321,12 +327,6 @@ typedef struct elf_section_header
     uint64_t sh_entsize;
 }elf_section_header_t;
 
-enum elf_source_type
-{
-    ELF_SOURCE_POSIX_FILE,
-    ELF_SOURCE_BUFFER,
-};
-
 typedef struct elf_info
 {
     elf_file_header_t           file_hdr;       /**< File header */
@@ -344,6 +344,44 @@ typedef struct elf_info
     }data;
 }elf_info_t;
 
+typedef struct elf_symbol
+{
+    /**
+     * This member holds an index into the object file's symbol string table,
+     * which holds character representations of the symbol names.  If the value
+     * is nonzero, it represents a string table index that gives the symbol name.
+     * Otherwise, the symbol has no name.
+     */
+    uint32_t    st_name;
+
+    /**
+     * This member specifies the symbol's type and binding attributes.
+     */
+    uint8_t     st_info;
+
+    /**
+     * This member defines the symbol visibility.
+     */
+    uint8_t     st_other;
+
+    /**
+     * Every symbol table entry is "defined" in relation to some section.
+     * This member holds the relevant section header table index.
+     */
+    uint16_t    st_shndx;
+
+    /**
+     * This member gives the value of the associated symbol.
+     */
+    uint64_t    st_value;
+
+    /**
+     * Many symbols have associated sizes. This member holds zero if the symbol
+     * has no size or an unknown size.
+     */
+    uint64_t    st_size;
+}elf_symbol_t;
+
 /**
  * @brief Parser ELF information from file
  * @param[out] dst  Where to store information.
@@ -353,10 +391,25 @@ typedef struct elf_info
 int elf_parser_file(elf_info_t** dst, FILE* file);
 
 /**
+ * @brief Parser symbol table
+ * @param[out] dst  Where to store information
+ * @param[in] info  ELF information
+ * @param[in] idx   index
+ * @return          Result
+ */
+int elf_parser_symbol(elf_symbol_t** dst, const elf_info_t* info, size_t idx);
+
+/**
  * @brief Destroy #elf_info_t
  * @param[in] info  Object to destroy
  */
-void elf_info_destroy(elf_info_t* info);
+void elf_release_info(elf_info_t* info);
+
+/**
+ * @brief Destroy #elf_symbol_t
+ * @param[in] symbols   Object to destroy
+ */
+void elf_release_symbol(elf_symbol_t* symbols);
 
 /**
  * @brief Parser ELF file header
@@ -407,6 +460,8 @@ int elf_dump_buffer(FILE* io, const void* buffer, size_t size);
  * @return              How many bytes written.
  */
 int elf_dump_info(FILE* io, const elf_info_t* info);
+
+int elf_dump_symbol(FILE* io, const elf_symbol_t* symbols, size_t size);
 
 #ifdef __cplusplus
 }

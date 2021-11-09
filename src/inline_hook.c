@@ -1,6 +1,7 @@
 #include "inline_hook.h"
+#define _GNU_SOURCE         /* See feature_test_macros(7) */
+#include <link.h>
 #include <stdlib.h>
-
 #include <assert.h>
 #include <inttypes.h>
 #include <string.h>
@@ -30,6 +31,12 @@
         ((TYPE*)((uint8_t*)(ptr) - (size_t)&((TYPE*)0)->member))
 #endif
 
+/**
+ * @brief align `size` to `align`
+ */
+#define ALIGN_SIZE(size, align) \
+    (((uintptr_t)(size) + ((uintptr_t)(align) - 1)) & ~((uintptr_t)(align) - 1))
+
 #define INLINE_HOOK_MAKE_INTERFACE(fn_inject, fn_uninject) \
     int inline_hook_inject(void** origin, void* target, void* detour) {\
         int ret;\
@@ -56,6 +63,68 @@ static size_t _get_page_size(void)
 #endif
 
     return page_size <= 0 ? 4096 : page_size;
+}
+
+static int _unix_dl_iterate_phdr_callback(struct dl_phdr_info* info, size_t size, void* data)
+{
+    (void)size;
+
+    uintptr_t* p_ret = data;
+    *p_ret = info->dlpi_addr;
+
+    return 1;
+}
+
+static uintptr_t _unix_get_relocation(void)
+{
+    uintptr_t ret = 0;
+    dl_iterate_phdr(_unix_dl_iterate_phdr_callback, &ret);
+    return ret;
+}
+
+static size_t _get_function_size(const void* addr)
+{
+    size_t ret = (size_t)-1;
+    elf_symbol_t* symbol_list = NULL;
+    FILE* f_exe = fopen("/proc/self/exe", "rb");
+    uintptr_t relocation = _unix_get_relocation();
+    uintptr_t target_addr = (uintptr_t)addr - relocation;
+
+    elf_info_t* info;
+    assert(elf_parser_file(&info, f_exe) == 0);
+
+    size_t idx;
+    for (idx = 0; idx < info->file_hdr.e_shnum; idx++)
+    {
+        if (info->section_hdr[idx].sh_type == 0x02 || info->section_hdr[idx].sh_type == 0x0b)
+        {
+            int num = elf_parser_symbol(&symbol_list, info, idx);
+
+            int i;
+            for (i = 0; i < num; i++)
+            {
+                if (symbol_list[i].st_value == target_addr)
+                {
+                    ret = symbol_list[i].st_size;
+                    goto fin;
+                }
+            }
+
+            elf_release_symbol(symbol_list);
+            symbol_list = NULL;
+        }
+    }
+
+fin:
+    if (symbol_list != NULL)
+    {
+        elf_release_symbol(symbol_list);
+        symbol_list = NULL;
+    }
+    elf_release_info(info);
+    fclose(f_exe);
+
+    return ret;
 }
 
 /**
@@ -198,61 +267,53 @@ static void _free_execute_memory(void* ptr)
 #include "Zydis/Zydis.h"
 
 #define X86_64_MAX_INSTRUCTION_SIZE         15
-#define X86_64_COND_JUMP_SHORT_SIZE         2
-#define X86_64_COND_JUMP_NEAR_SIZE          6
+#define X86_64_OPCODE_SIZE_JUMP_NEAR        5
+#define X86_64_OPCODE_SIZE_JUMP_FAR         14
 #define X86_64_OPCODE_INT3                  (0xcc)
 
-typedef struct x86_64_convert_ctx
+#define X86_64_JUMP_INSN_MAP(xx) \
+    xx(ZYDIS_MNEMONIC_JB)    \
+    xx(ZYDIS_MNEMONIC_JBE)   \
+    xx(ZYDIS_MNEMONIC_JCXZ)  \
+    xx(ZYDIS_MNEMONIC_JECXZ) \
+    xx(ZYDIS_MNEMONIC_JKNZD) \
+    xx(ZYDIS_MNEMONIC_JKZD)  \
+    xx(ZYDIS_MNEMONIC_JL)    \
+    xx(ZYDIS_MNEMONIC_JLE)   \
+    xx(ZYDIS_MNEMONIC_JMP)   \
+    xx(ZYDIS_MNEMONIC_JNB)   \
+    xx(ZYDIS_MNEMONIC_JNBE)  \
+    xx(ZYDIS_MNEMONIC_JNL)   \
+    xx(ZYDIS_MNEMONIC_JNLE)  \
+    xx(ZYDIS_MNEMONIC_JNO)   \
+    xx(ZYDIS_MNEMONIC_JNP)   \
+    xx(ZYDIS_MNEMONIC_JNS)   \
+    xx(ZYDIS_MNEMONIC_JNZ)   \
+    xx(ZYDIS_MNEMONIC_JO)    \
+    xx(ZYDIS_MNEMONIC_JP)    \
+    xx(ZYDIS_MNEMONIC_JRCXZ) \
+    xx(ZYDIS_MNEMONIC_JS)    \
+    xx(ZYDIS_MNEMONIC_JZ)
+
+typedef struct x86_64_patch_ctx
 {
-    size_t      o_offset;               /**< offset for #trampline_x86_64_t::wrap_opcode */
-    size_t      t_offset;               /**< offset for #trampline_x86_64_t::addr_target */
-    size_t      ext_pos;                /**< position of ext space */
-}x86_64_convert_ctx_t;
-#define X86_64_CONVERT_CTX_INIT { 0, 0, 33 }
+    size_t      pos_insn;               /**< The insn current decode */
+}x86_64_patch_ctx_t;
+#define X86_64_PATCH_CTX_INIT { 0 }
 
 typedef struct x86_64_trampoline
 {
-    uint8_t*    addr_target;            /**< Target function address */
-    uint8_t*    addr_detour;            /**< Detour function address */
-    uint8_t     redirect_opcode[14];    /**< Opcode to redirect to detour function */
-    uint8_t     backup_opcode[14];      /**< Original function code for recover inject */
+    uint8_t*    addr_target;                                    /**< Target function address */
+    uint8_t*    addr_detour;                                    /**< Detour function address */
+    size_t      size_target;                                    /**< Function size of target */
 
-    /**
-     * @brief Opcode to call original function, 64 bytes.
-     * 
-     * Instruction layout:
-     * ```
-     *  [LOW ADDR] | ------------------------ |
-     *           0 |                          |
-     *             | wrap original code       | -> 5 or more bytes (align to whole instruction, max 4+15=19 bytes)
-     *           n |                          |
-     *             | ------------------------ |
-     *         n+1 |                          |
-     *             | force redirect code      | -> 14 bytes
-     *        n+14 |                          |
-     *             | ------------------------ |
-     *             |                          |
-     *       [gap] | 0xcc                     | -> Any space left must set to INT3, minimum 0 byte.
-     *             |                          |
-     *             | ------------------------ |
-     *          33 |                          |
-     *             | ext space (0xcc)         | -> EXT space for wrapping opcode. Any space left must set to INT3
-     *          63 |                          |
-     * [HIGH ADDR] | ------------------------ |
-     * ```
-     * 
-     * Field explain as:
-     * [0, n]:      Store translated original function opcode. Redirect code inject into target function always take 5
-     *              bytes, that means the worst case of original function opcode is 4 bytes whole instructions and 1 broken
-     *              instruction. Since max length of x86_64 instructions is 15 bytes, this field will max take 19 bytes.
-     * [n+1, n+14]: Redirect opcode to jump back to original function. 32 bit near jump require 5 bytes and 64 bit long
-     *              jump require 14 bytes.
-     * [gap]:       There might be some gap due to unknown size of [0, n]. For safety it is set to `INT3` (0xcc). This
-     *              aera has minimum 0 byte if n==18.
-     * [33, 63]:    EXT space . Need that for `JCXZ`-like opcode which only has short jump (128 range). We only need
-     *              three because inject only cost 5 bytes, so the worst case is 3 short jump instructions.
-     */
-    uint8_t     wrap_opcode[64];
+    size_t      redirect_size;                                  /**< Size of redirect code */
+    uint8_t     redirect_opcode[X86_64_OPCODE_SIZE_JUMP_FAR];   /**< Opcode to redirect to detour function */
+    uint8_t     backup_opcode[X86_64_OPCODE_SIZE_JUMP_FAR];     /**< Original function code for recover inject */
+
+    size_t      trampoline_cap;                                 /**< The capacity of trampoline */
+    size_t      trampoline_size;                                /**< The size of trampoline */
+    uint8_t     trampoline[];                                   /**< Trampoline */
 }x86_64_trampoline_t;
 
 static int _x86_64_is_near_size(ptrdiff_t addr_diff)
@@ -337,89 +398,29 @@ static ZydisAddressWidth _x86_64_get_address_width(void)
     return ZYDIS_ADDRESS_WIDTH_MAX_VALUE;
 }
 
-static uint8_t* _x86_64_get_dist_addr(uint8_t* baseaddr, const ZydisDecodedOperand* oper)
+static ZydisMachineMode _x86_64_get_machine_mode(void)
 {
-    if (oper->imm.is_signed)
+    switch (sizeof(void*))
     {
-        return baseaddr + oper->imm.value.s;
+    case 4:
+        return ZYDIS_MACHINE_MODE_LEGACY_32;
+    case 8:
+        return ZYDIS_MACHINE_MODE_LONG_64;
+    default:
+        return ZYDIS_MACHINE_MODE_MAX_VALUE;
     }
-    return baseaddr + oper->imm.value.u;
 }
 
 /**
- * @return  0:not covert; 1: success; -1: failure
+ * @return  0 - do nothing; 1 - patch success; -1 - patch failure
  */
-static int _x86_64_try_convert_jmp(x86_64_trampoline_t* handle, const ZydisDecodedInstruction* insn, x86_64_convert_ctx_t* ctx)
+static int _x86_64_patch_instruction(x86_64_trampoline_t* handle, x86_64_patch_ctx_t* patch, ZydisDecodedInstruction* insn)
 {
-#define FILL_JUMP_NEAR_CODE_AND_RETURN(opcode2)    \
-    do {\
-        handle->wrap_opcode[ctx->o_offset++] = 0x0f;\
-        handle->wrap_opcode[ctx->o_offset++] = opcode2;\
-        assert(insn->operand_count == 1);\
-        uint8_t* dist_addr = _x86_64_get_dist_addr(handle->addr_target + ctx->t_offset, &insn->operands[0]);\
-        uint32_t relative_addr = (uint32_t)(dist_addr - &handle->wrap_opcode[ctx->o_offset] - 6);\
-        memcpy(&handle->wrap_opcode[ctx->o_offset], &relative_addr, sizeof(relative_addr));\
-        ctx->o_offset += 4;\
-    } while (0);\
-    return 1
-
-    switch (insn->mnemonic)
-    {
-    case ZYDIS_MNEMONIC_JB:     FILL_JUMP_NEAR_CODE_AND_RETURN(0x82);
-    case ZYDIS_MNEMONIC_JBE:    FILL_JUMP_NEAR_CODE_AND_RETURN(0x86);
-
-    case ZYDIS_MNEMONIC_JCXZ:   //-fallthrough
-    case ZYDIS_MNEMONIC_JECXZ: {
-        /* Calculate redirect opcode position */
-        uint8_t* opcode_pos = &handle->wrap_opcode[ctx->ext_pos];
-        /* JCXZ [redirect opcode] */
-        uint8_t relative_addr = (uint8_t)(opcode_pos - &handle->wrap_opcode[ctx->o_offset] - 2);
-        handle->wrap_opcode[ctx->o_offset++] = 0xe3;
-        handle->wrap_opcode[ctx->o_offset++] = relative_addr;
-        /* JMP [original jcxz position] */
-        uint8_t* dst_addr = _x86_64_get_dist_addr(handle->addr_target + ctx->t_offset, &insn->operands[0]);
-
-        int ret;
-        if ((ret = _x86_64_fill_jump_code(opcode_pos, opcode_pos, dst_addr)) < 0)
-        {
-            LOG("generate opcode failed");
-            return -1;
-        }
-        ctx->ext_pos += ret;
-        return 1;
-    }
-
-    case ZYDIS_MNEMONIC_JL:     FILL_JUMP_NEAR_CODE_AND_RETURN(0x8c);
-    case ZYDIS_MNEMONIC_JLE:    FILL_JUMP_NEAR_CODE_AND_RETURN(0x8e);
-    case ZYDIS_MNEMONIC_JMP: {
-        uint8_t* dist_addr = _x86_64_get_dist_addr(handle->addr_target + ctx->t_offset, &insn->operands[0]);
-        int ret;
-        if ((ret = _x86_64_fill_jump_code(&handle->wrap_opcode[ctx->o_offset], &handle->wrap_opcode[ctx->o_offset], dist_addr)) < 0)
-        {
-            LOG("generate opcode failed");
-            return -1;
-        }
-        ctx->o_offset += ret;
-        return 1;
-    }
-    case ZYDIS_MNEMONIC_JNB:    FILL_JUMP_NEAR_CODE_AND_RETURN(0x83);
-    case ZYDIS_MNEMONIC_JNBE:   FILL_JUMP_NEAR_CODE_AND_RETURN(0x87);
-    case ZYDIS_MNEMONIC_JNL:    FILL_JUMP_NEAR_CODE_AND_RETURN(0x8d);
-    case ZYDIS_MNEMONIC_JNLE:   FILL_JUMP_NEAR_CODE_AND_RETURN(0x8f);
-    case ZYDIS_MNEMONIC_JNO:    FILL_JUMP_NEAR_CODE_AND_RETURN(0x81);
-    case ZYDIS_MNEMONIC_JNP:    FILL_JUMP_NEAR_CODE_AND_RETURN(0x8b);
-    case ZYDIS_MNEMONIC_JNS:    FILL_JUMP_NEAR_CODE_AND_RETURN(0x89);
-    case ZYDIS_MNEMONIC_JNZ:    FILL_JUMP_NEAR_CODE_AND_RETURN(0x85);
-    case ZYDIS_MNEMONIC_JO:     FILL_JUMP_NEAR_CODE_AND_RETURN(0x80);
-    case ZYDIS_MNEMONIC_JP:     FILL_JUMP_NEAR_CODE_AND_RETURN(0x8a);
-    case ZYDIS_MNEMONIC_JS:     FILL_JUMP_NEAR_CODE_AND_RETURN(0x88);
-    case ZYDIS_MNEMONIC_JZ:     FILL_JUMP_NEAR_CODE_AND_RETURN(0x84);
-    default:
-        break;
-    }
+    (void)handle;
+    (void)patch;
+    (void)insn;
+    // TODO
     return 0;
-
-#undef FILL_JUMP_NEAR_CODE_AND_RETURN
 }
 
 /**
@@ -429,74 +430,87 @@ static int _x86_64_try_convert_jmp(x86_64_trampoline_t* handle, const ZydisDecod
 static int _x86_64_generate_trampoline_opcode(x86_64_trampoline_t* handle)
 {
     ZydisDecoder decoder;
-    ZydisDecoderInit(&decoder, ZYDIS_MACHINE_MODE_LONG_64, _x86_64_get_address_width());
+    ZydisDecoderInit(&decoder, _x86_64_get_machine_mode(), _x86_64_get_address_width());
     ZydisDecodedInstruction instruction;
 
-    size_t opcode_size = _x86_64_get_opcode_copy_size(handle);
-    x86_64_convert_ctx_t convert_ctx = X86_64_CONVERT_CTX_INIT;
-
-    int ret;
-    for (; convert_ctx.t_offset <= opcode_size && ZYAN_SUCCESS(ZydisDecoderDecodeBuffer(&decoder,
-        (uint8_t*)handle->addr_target + convert_ctx.t_offset, X86_64_MAX_INSTRUCTION_SIZE, &instruction));
-        convert_ctx.t_offset += instruction.length)
+    x86_64_patch_ctx_t patch = X86_64_PATCH_CTX_INIT;
+    for (patch.pos_insn = 0;
+        ZYAN_SUCCESS(ZydisDecoderDecodeBuffer(&decoder, handle->trampoline + patch.pos_insn, handle->size_target - patch.pos_insn, &instruction));
+        patch.pos_insn += instruction.length)
     {
-        /* If RET occur before opcode inject position, it is not save to inject because it may broken other things */
-        if (instruction.mnemonic == ZYDIS_MNEMONIC_RET)
+        switch (_x86_64_patch_instruction(handle, &patch, &instruction))
         {
-            return -1;
+        case 0:     break;
+        case 1:     break;
+        default:    return -1;
         }
-
-        ret = _x86_64_try_convert_jmp(handle, &instruction, &convert_ctx);
-        if (ret == -1)
-        {/* failure */
-            return -1;
-        }
-        else if (ret == 1)
-        {/* success */
-            continue;
-        }
-
-        memcpy(&handle->wrap_opcode[convert_ctx.o_offset], &handle->addr_target[convert_ctx.t_offset], instruction.length);
-        convert_ctx.o_offset += instruction.length;
     }
-
-    if ((ret = _x86_64_fill_jump_code(&handle->wrap_opcode[convert_ctx.o_offset],
-        &handle->wrap_opcode[convert_ctx.o_offset], &handle->addr_target[convert_ctx.t_offset])) < 0)
-    {
-        LOG("generate opcode failed");
-        return -1;
-    }
-    convert_ctx.o_offset += ret;
 
     return 0;
 }
 
-static void _x86_64_dump_info(void)
+static int _x86_64_is_jump_insn(ZydisMnemonic insn)
 {
-	elf_info_t* info;
-	FILE* f_exe = fopen("/proc/self/exe", "rb");
+#define X86_64_EXPLAIN_JMP_MAP(x) \
+    case x: return 1;
 
-	assert(elf_parser_file(&info, f_exe) == 0);
-	elf_dump_info(stdout, info);
-    elf_info_destroy(info);
-	fclose(f_exe);
+    switch (insn)
+    {
+    X86_64_JUMP_INSN_MAP(X86_64_EXPLAIN_JMP_MAP)
+    default:    return 0;
+    }
+
+#undef X86_64_EXPLAIN_JMP_MAP
+}
+
+static size_t _x86_64_calc_trampoline_size(const void* func, size_t func_size)
+{
+    ZydisDecoder decoder;
+    ZydisDecoderInit(&decoder, _x86_64_get_machine_mode(), _x86_64_get_address_width());
+    ZydisDecodedInstruction instruction;
+
+    /* calculate `jmp` number */
+    size_t pos;
+    size_t jmp_cnt = 0;
+    for (pos = 0;
+        ZYAN_SUCCESS(ZydisDecoderDecodeBuffer(&decoder, (uint8_t*)func + pos, func_size - pos, &instruction));
+        pos += instruction.length)
+    {
+        if (_x86_64_is_jump_insn(instruction.mnemonic))
+        {
+            jmp_cnt++;
+        }
+    }
+
+    /* The worst case we need every one wrap to far jump */
+    size_t jmp_far_size = X86_64_OPCODE_SIZE_JUMP_FAR * jmp_cnt;
+
+    return func_size + jmp_far_size;
 }
 
 static int _x86_64_inline_hook_inject(void** origin, void* target, void* detour)
 {
     int ret;
-    _x86_64_dump_info();
-
-    size_t page_size = _get_page_size();
-    x86_64_trampoline_t* handle = _alloc_execute_memory(page_size);
-    if (handle == NULL)
+    size_t target_func_size = _get_function_size(target);
+    if (target_func_size == (size_t)-1)
     {
         return -1;
     }
 
-    memset(handle, X86_64_OPCODE_INT3, sizeof(*handle));
+    size_t trampoline_size = _x86_64_calc_trampoline_size(target, target_func_size);
+    size_t malloc_size = ALIGN_SIZE(sizeof(x86_64_trampoline_t) + trampoline_size, _get_page_size());
+
+    x86_64_trampoline_t* handle = _alloc_execute_memory(malloc_size);
+    if (handle == NULL)
+    {
+        return -1;
+    }
+    memset(handle, X86_64_OPCODE_INT3, malloc_size);
+
     handle->addr_target = target;
     handle->addr_detour = detour;
+    handle->size_target = target_func_size;
+    handle->trampoline_cap = malloc_size - sizeof(x86_64_trampoline_t);
 
     if ((ret = _x86_64_fill_jump_code(handle->redirect_opcode, target, detour)) < 0)
     {
@@ -504,7 +518,10 @@ static int _x86_64_inline_hook_inject(void** origin, void* target, void* detour)
         _free_execute_memory(handle);
         return -1;
     }
+    handle->redirect_size = ret;
     memcpy(handle->backup_opcode, target, ret);
+    memcpy(handle->trampoline, target, target_func_size);
+    handle->trampoline_size = target_func_size;
 
     if (_x86_64_generate_trampoline_opcode(handle) < 0)
     {
@@ -518,7 +535,7 @@ static int _x86_64_inline_hook_inject(void** origin, void* target, void* detour)
         return -1;
     }
 
-    *origin = handle->wrap_opcode;
+    *origin = handle->trampoline;
     _flush_instruction_cache(target, _x86_64_get_opcode_copy_size(handle));
 
     return 0;
@@ -526,77 +543,13 @@ static int _x86_64_inline_hook_inject(void** origin, void* target, void* detour)
 
 static void _x86_64_inline_hook_uninject(void* origin)
 {
-    x86_64_trampoline_t* handle = container_of(origin, x86_64_trampoline_t, wrap_opcode);
+    x86_64_trampoline_t* handle = container_of(origin, x86_64_trampoline_t, trampoline);
     if (_system_modify_opcode(handle->addr_target, sizeof(handle->redirect_opcode), _x86_64_undo_inject, handle) > 0)
     {
         assert(!"modify opcode failed");
     }
     _flush_instruction_cache(handle->addr_target, _x86_64_get_opcode_copy_size(handle));
     _free_execute_memory(handle);
-}
-
-int inline_hook_dump(char* buffer, unsigned size, const void* origin)
-{
-    const x86_64_trampoline_t* handle = container_of(origin, x86_64_trampoline_t, wrap_opcode);
-
-    /* 5 bytes near jump */
-    if (handle->redirect_opcode[sizeof(handle->redirect_opcode) - 1] == X86_64_OPCODE_INT3)
-    {
-        return snprintf(buffer, size,
-            "[INJECT]\n"
-            "%p | %02x %02x %02x %02x %02x\n"
-            "[BACKUP]\n"
-            "%p | %02x %02x %02x %02x %02x\n"
-            "[OPCODE]\n"
-            "%p | %02x %02x %02x %02x %02x %02x %02x %02x\n"
-            "%p | %02x %02x %02x %02x %02x %02x %02x %02x\n"
-            "%p | %02x %02x %02x %02x %02x %02x %02x %02x\n"
-            "%p | %02x %02x %02x %02x %02x %02x %02x %02x\n"
-            "%p | %02x %02x %02x %02x %02x %02x %02x %02x\n"
-            "%p | %02x %02x %02x %02x %02x %02x %02x %02x\n"
-            "%p | %02x %02x %02x %02x %02x %02x %02x %02x\n"
-            "%p | %02x %02x %02x %02x %02x %02x %02x %02x\n",
-            handle->addr_target, handle->addr_target[0], handle->addr_target[1], handle->addr_target[2], handle->addr_target[3], handle->addr_target[4],
-            handle->backup_opcode, handle->backup_opcode[0], handle->backup_opcode[1], handle->backup_opcode[2], handle->backup_opcode[3], handle->backup_opcode[4],
-            &handle->wrap_opcode[0], handle->wrap_opcode[0], handle->wrap_opcode[1], handle->wrap_opcode[2], handle->wrap_opcode[3], handle->wrap_opcode[4], handle->wrap_opcode[5], handle->wrap_opcode[6], handle->wrap_opcode[7],
-            &handle->wrap_opcode[8], handle->wrap_opcode[8], handle->wrap_opcode[9], handle->wrap_opcode[10], handle->wrap_opcode[11], handle->wrap_opcode[12], handle->wrap_opcode[13], handle->wrap_opcode[14], handle->wrap_opcode[15],
-            &handle->wrap_opcode[16], handle->wrap_opcode[16], handle->wrap_opcode[17], handle->wrap_opcode[18], handle->wrap_opcode[19], handle->wrap_opcode[20], handle->wrap_opcode[21], handle->wrap_opcode[22], handle->wrap_opcode[23],
-            &handle->wrap_opcode[24], handle->wrap_opcode[24], handle->wrap_opcode[25], handle->wrap_opcode[26], handle->wrap_opcode[27], handle->wrap_opcode[28], handle->wrap_opcode[29], handle->wrap_opcode[30], handle->wrap_opcode[31],
-            &handle->wrap_opcode[32], handle->wrap_opcode[32], handle->wrap_opcode[33], handle->wrap_opcode[34], handle->wrap_opcode[35], handle->wrap_opcode[36], handle->wrap_opcode[37], handle->wrap_opcode[38], handle->wrap_opcode[39],
-            &handle->wrap_opcode[40], handle->wrap_opcode[40], handle->wrap_opcode[41], handle->wrap_opcode[42], handle->wrap_opcode[43], handle->wrap_opcode[44], handle->wrap_opcode[45], handle->wrap_opcode[46], handle->wrap_opcode[47],
-            &handle->wrap_opcode[48], handle->wrap_opcode[48], handle->wrap_opcode[49], handle->wrap_opcode[50], handle->wrap_opcode[51], handle->wrap_opcode[52], handle->wrap_opcode[53], handle->wrap_opcode[54], handle->wrap_opcode[55],
-            &handle->wrap_opcode[56], handle->wrap_opcode[56], handle->wrap_opcode[57], handle->wrap_opcode[58], handle->wrap_opcode[59], handle->wrap_opcode[60], handle->wrap_opcode[61], handle->wrap_opcode[62], handle->wrap_opcode[63]);
-    }
-
-    /* 14 bytes long jump */
-    return snprintf(buffer, size,
-        "[INJECT]\n"
-        "%p | %02x %02x %02x %02x %02x %02x %02x %02x\n"
-        "%p | %02x %02x %02x %02x %02x %02x\n"
-        "[BACKUP]\n"
-        "%p | %02x %02x %02x %02x %02x %02x %02x %02x\n"
-        "%p | %02x %02x %02x %02x %02x %02x\n"
-        "[OPCODE]\n"
-        "%p | %02x %02x %02x %02x %02x %02x %02x %02x\n"
-        "%p | %02x %02x %02x %02x %02x %02x %02x %02x\n"
-        "%p | %02x %02x %02x %02x %02x %02x %02x %02x\n"
-        "%p | %02x %02x %02x %02x %02x %02x %02x %02x\n"
-        "%p | %02x %02x %02x %02x %02x %02x %02x %02x\n"
-        "%p | %02x %02x %02x %02x %02x %02x %02x %02x\n"
-        "%p | %02x %02x %02x %02x %02x %02x %02x %02x\n"
-        "%p | %02x %02x %02x %02x %02x %02x %02x %02x\n",
-        &handle->addr_target[0], handle->addr_target[0], handle->addr_target[1], handle->addr_target[2], handle->addr_target[3], handle->addr_target[4], handle->addr_target[5], handle->addr_target[6], handle->addr_target[7],
-        &handle->addr_target[8], handle->addr_target[8], handle->addr_target[9], handle->addr_target[10], handle->addr_target[11], handle->addr_target[12], handle->addr_target[13],
-        &handle->backup_opcode[0], handle->backup_opcode[0], handle->backup_opcode[1], handle->backup_opcode[2], handle->backup_opcode[3], handle->backup_opcode[4], handle->backup_opcode[5], handle->backup_opcode[6], handle->backup_opcode[7],
-        &handle->backup_opcode[8], handle->backup_opcode[8], handle->backup_opcode[9], handle->backup_opcode[10], handle->backup_opcode[11], handle->backup_opcode[12], handle->backup_opcode[13],
-        &handle->wrap_opcode[0], handle->wrap_opcode[0], handle->wrap_opcode[1], handle->wrap_opcode[2], handle->wrap_opcode[3], handle->wrap_opcode[4], handle->wrap_opcode[5], handle->wrap_opcode[6], handle->wrap_opcode[7],
-        &handle->wrap_opcode[8], handle->wrap_opcode[8], handle->wrap_opcode[9], handle->wrap_opcode[10], handle->wrap_opcode[11], handle->wrap_opcode[12], handle->wrap_opcode[13], handle->wrap_opcode[14], handle->wrap_opcode[15],
-        &handle->wrap_opcode[16], handle->wrap_opcode[16], handle->wrap_opcode[17], handle->wrap_opcode[18], handle->wrap_opcode[19], handle->wrap_opcode[20], handle->wrap_opcode[21], handle->wrap_opcode[22], handle->wrap_opcode[23],
-        &handle->wrap_opcode[24], handle->wrap_opcode[24], handle->wrap_opcode[25], handle->wrap_opcode[26], handle->wrap_opcode[27], handle->wrap_opcode[28], handle->wrap_opcode[29], handle->wrap_opcode[30], handle->wrap_opcode[31],
-        &handle->wrap_opcode[32], handle->wrap_opcode[32], handle->wrap_opcode[33], handle->wrap_opcode[34], handle->wrap_opcode[35], handle->wrap_opcode[36], handle->wrap_opcode[37], handle->wrap_opcode[38], handle->wrap_opcode[39],
-        &handle->wrap_opcode[40], handle->wrap_opcode[40], handle->wrap_opcode[41], handle->wrap_opcode[42], handle->wrap_opcode[43], handle->wrap_opcode[44], handle->wrap_opcode[45], handle->wrap_opcode[46], handle->wrap_opcode[47],
-        &handle->wrap_opcode[48], handle->wrap_opcode[48], handle->wrap_opcode[49], handle->wrap_opcode[50], handle->wrap_opcode[51], handle->wrap_opcode[52], handle->wrap_opcode[53], handle->wrap_opcode[54], handle->wrap_opcode[55],
-        &handle->wrap_opcode[56], handle->wrap_opcode[56], handle->wrap_opcode[57], handle->wrap_opcode[58], handle->wrap_opcode[59], handle->wrap_opcode[60], handle->wrap_opcode[61], handle->wrap_opcode[62], handle->wrap_opcode[63]);
 }
 
 INLINE_HOOK_MAKE_INTERFACE(_x86_64_inline_hook_inject, _x86_64_inline_hook_uninject)
@@ -620,8 +573,8 @@ typedef struct arm_convert_ctx
  * ```
  * or 2 instructions (with any address space)
  * ```
- * ldr	pc, [pc, #-4]
- * .word	address
+ * ldr  pc, [pc, #-4]
+ * .word    address
  * ```
  *
  * To know whether 12 bytes code is used, check if #trampoline_arm64_t::redirect_opcode[2]
@@ -639,19 +592,19 @@ typedef struct arm_trampoline
      * 
      * Instruction layout:
      * ```
-	 *  [LOW ADDR] | ------------------------ |
-	 *           0 |                          |
-	 *           n | wrap original code       | -> max 2 instructions
-	 *             | ------------------------ |
-	 *         n+1 |                          |
-	 *         n+2 | force redirect code      | -> max 2 instructions
-	 *             | ------------------------ |
-	 *       [gap] | 0x00                     | -> Any space left must set to 0x00
-	 *             | ------------------------ |
-	 *           4 |                          |
-	 *             | ext space (0x00)         | -> EXT space for wrapping opcode
-	 *           7 |                          |
-	 * [HIGH ADDR] | ------------------------ |
+     *  [LOW ADDR] | ------------------------ |
+     *           0 |                          |
+     *           n | wrap original code       | -> max 2 instructions
+     *             | ------------------------ |
+     *         n+1 |                          |
+     *         n+2 | force redirect code      | -> max 2 instructions
+     *             | ------------------------ |
+     *       [gap] | 0x00                     | -> Any space left must set to 0x00
+     *             | ------------------------ |
+     *           4 |                          |
+     *             | ext space (0x00)         | -> EXT space for wrapping opcode
+     *           7 |                          |
+     * [HIGH ADDR] | ------------------------ |
      * ```
      * 
      * The wrap instruction is a little bit complex if original one is a relative branch Instructions:

@@ -19,6 +19,9 @@
 #define ELF_SECTION_HEADER_32_SIZE  40
 #define ELF_SECTION_HEADER_64_SIZE  64
 
+#define ELF_SYMBOL_32_SIZE  16
+#define ELF_SYMBOL_64_SIZE  24
+
 union ELF_U16
 {
     uint16_t    val;
@@ -630,6 +633,76 @@ static int _elf_parser_section_header_from_file(elf_section_header_t* dst, FILE*
     return _elf_parser_section_header_ext(dst, file_hdr, cache, read_size);
 }
 
+static int _elf_parser_symbol32(elf_symbol_t* symbol_list, const elf_info_t* info, size_t num)
+{
+    uint8_t buffer[ELF_SYMBOL_32_SIZE];
+    FILE* file = info->data.source.as_file;
+    int f_EI_DATA = info->file_hdr.f_EI_DATA;
+
+    size_t idx;
+    for (idx = 0; idx < num; idx++)
+    {
+        size_t read_size = fread(buffer, 1, sizeof(buffer), file);
+        if (read_size != sizeof(buffer))
+        {
+            return -1;
+        }
+
+        symbol_list[idx].st_name = _elf_parser_32bit(&buffer[0], f_EI_DATA);
+        symbol_list[idx].st_value = _elf_parser_32bit(&buffer[4], f_EI_DATA);
+        symbol_list[idx].st_size = _elf_parser_32bit(&buffer[8], f_EI_DATA);
+        symbol_list[idx].st_info = buffer[12];
+        symbol_list[idx].st_other = buffer[13];
+        symbol_list[idx].st_shndx = _elf_parser_16bit(&buffer[14], f_EI_DATA);
+    }
+
+    return 0;
+}
+
+static int _elf_parser_symbol64(elf_symbol_t* symbol_list, const elf_info_t* info, size_t num)
+{
+    uint8_t buffer[ELF_SYMBOL_64_SIZE];
+    FILE* file = info->data.source.as_file;
+    int f_EI_DATA = info->file_hdr.f_EI_DATA;
+
+    size_t idx;
+    for (idx = 0; idx < num; idx++)
+    {
+        size_t read_size = fread(buffer, 1, sizeof(buffer), file);
+        if (read_size != sizeof(buffer))
+        {
+            return -1;
+        }
+
+        symbol_list[idx].st_name = _elf_parser_32bit(&buffer[0], f_EI_DATA);
+        symbol_list[idx].st_info = buffer[4];
+        symbol_list[idx].st_other = buffer[5];
+        symbol_list[idx].st_shndx = _elf_parser_16bit(&buffer[6], f_EI_DATA);
+        symbol_list[idx].st_value = _elf_parser_64bit(&buffer[8], f_EI_DATA);
+        symbol_list[idx].st_size = _elf_parser_64bit(&buffer[16], f_EI_DATA);
+    }
+
+    return 0;
+}
+
+static int _elf_parser_symbol(elf_symbol_t* symbol_list, const elf_info_t* info, const elf_section_header_t* section_hdr, size_t num)
+{
+    if (fseek(info->data.source.as_file, section_hdr->sh_offset, SEEK_SET) != 0)
+    {
+        return -1;
+    }
+
+    if (info->file_hdr.f_EI_CLASS == 1)
+    {
+        return _elf_parser_symbol32(symbol_list, info, num);
+    }
+    else if (info->file_hdr.f_EI_CLASS == 2)
+    {
+        return _elf_parser_symbol64(symbol_list, info, num);
+    }
+    return -1;
+}
+
 int elf_parser_file_header(elf_file_header_t* dst, const void* addr, size_t size)
 {
     const uint8_t* pdat = addr;
@@ -908,7 +981,76 @@ int elf_dump_info(FILE* io, const elf_info_t* info)
     return written_size;
 }
 
-void elf_info_destroy(elf_info_t* info)
+void elf_release_info(elf_info_t* info)
 {
     free(info);
+}
+
+void elf_release_symbol(elf_symbol_t* symbols)
+{
+    free(symbols);
+}
+
+int elf_parser_symbol(elf_symbol_t** dst, const elf_info_t* info, size_t idx)
+{
+    if (idx >= info->file_hdr.e_shnum)
+    {
+        return -1;
+    }
+
+    /* Symbol entry should be 16 bytes (32-bit) or 24 bytes (64-bit) */
+    if (info->section_hdr[idx].sh_entsize != ELF_SYMBOL_32_SIZE
+        && info->section_hdr[idx].sh_entsize != ELF_SYMBOL_64_SIZE)
+    {
+        return -1;
+    }
+
+    int num = info->section_hdr[idx].sh_size / info->section_hdr[idx].sh_entsize;
+    elf_symbol_t* symbol_list = malloc(sizeof(elf_symbol_t) * num);
+    if (symbol_list == NULL)
+    {
+        return -1;
+    }
+
+    int ret = _elf_parser_symbol(symbol_list, info, &info->section_hdr[idx], num);
+    if (ret < 0)
+    {
+        free(symbol_list);
+        return -1;
+    }
+
+    *dst = symbol_list;
+    return num;
+}
+
+int elf_dump_symbol(FILE* io, const elf_symbol_t* symbols, size_t size)
+{
+    int ret;
+    int written_size = 0;
+    
+    ret = fprintf(io,
+        "%-*s %-*s %-*s %-*s %-*s %-*s\n",
+        10, "[st_name]",
+        10, "[st_info]",
+        10, "[st_other]",
+        10, "[st_shndx]",
+        18, "[st_value]",
+        18, "[st_size]");
+    written_size += ret;
+
+    size_t idx;
+    for (idx = 0; idx < size; idx++)
+    {
+        ret = fprintf(io,
+            "0x%08" PRIx32 " 0x%08x 0x%08x 0x%08" PRIx16 " 0x%016" PRIx64 " 0x%016" PRIx64 "\n",
+            symbols[idx].st_name,
+            (unsigned)symbols[idx].st_info,
+            (unsigned)symbols[idx].st_other,
+            symbols[idx].st_shndx,
+            symbols[idx].st_value,
+            symbols[idx].st_size);
+        written_size += ret;
+    }
+
+    return written_size;
 }
