@@ -5,7 +5,7 @@ list(APPEND CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/cmake")
 
 add_library(${PROJECT_NAME}
     src/elfparser.c
-    src/inline_hook.c
+    src/inlinehook.c
     src/log.c
     src/once.c)
 

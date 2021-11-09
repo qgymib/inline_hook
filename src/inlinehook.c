@@ -1,4 +1,4 @@
-#include "inline_hook.h"
+#include "inlinehook.h"
 #define _GNU_SOURCE         /* See feature_test_macros(7) */
 #include <link.h>
 #include <stdlib.h>
@@ -566,7 +566,7 @@ static int _x86_64_fix_jcc(x86_64_trampoline_t* handle, x86_64_patch_ctx_t* patc
  * @see https://www.felixcloutier.com/x86/jmp
  */
 static int _x86_64_fix_jmp(x86_64_trampoline_t* handle, x86_64_patch_ctx_t* patch,
-	const ZydisDecodedInstruction* insn)
+    const ZydisDecodedInstruction* insn)
 {
     assert(insn->operand_count == 1);
 
