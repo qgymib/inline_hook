@@ -6,3 +6,4 @@ endfunction()
 
 ADD_TEST_CASE(test_simple)
 ADD_TEST_CASE(test_callback)
+ADD_TEST_CASE(test_loop)
