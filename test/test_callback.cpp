@@ -15,7 +15,7 @@ static int add(int a, int b, fn_callback cb)
 
 static int del(int a, int b, fn_callback cb)
 {
-    return a - b;
+    return cb(a - b);
 }
 
 TEST(callback)
@@ -31,5 +31,5 @@ TEST(callback)
 
     inline_hook_uninject((void**)&fn_orig);
     ASSERT_EQ_PTR(fn_orig, NULL);
-    ASSERT_EQ_D32(add(1, 2, _callback_square), 3);
+    ASSERT_EQ_D32(add(1, 2, _callback_square), 9);
 }
