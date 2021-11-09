@@ -271,7 +271,10 @@ static void _free_execute_memory(void* ptr)
 #define X86_64_OPCODE_SIZE_JUMP_FAR         14
 #define X86_64_OPCODE_INT3                  (0xcc)
 
-#define X86_64_JUMP_INSN_MAP(xx) \
+/**
+ * @brief List of conditional jump instructions
+ */
+#define X86_64_JCC_MAP(xx) \
     xx(ZYDIS_MNEMONIC_JB)    \
     xx(ZYDIS_MNEMONIC_JBE)   \
     xx(ZYDIS_MNEMONIC_JCXZ)  \
@@ -280,7 +283,6 @@ static void _free_execute_memory(void* ptr)
     xx(ZYDIS_MNEMONIC_JKZD)  \
     xx(ZYDIS_MNEMONIC_JL)    \
     xx(ZYDIS_MNEMONIC_JLE)   \
-    xx(ZYDIS_MNEMONIC_JMP)   \
     xx(ZYDIS_MNEMONIC_JNB)   \
     xx(ZYDIS_MNEMONIC_JNBE)  \
     xx(ZYDIS_MNEMONIC_JNL)   \
@@ -295,12 +297,35 @@ static void _free_execute_memory(void* ptr)
     xx(ZYDIS_MNEMONIC_JS)    \
     xx(ZYDIS_MNEMONIC_JZ)
 
+ /**
+  * @brief List of unconditional jump instructions
+  */
+#define X86_64_JMP_MAP(xx)  \
+    xx(ZYDIS_MNEMONIC_JMP)
+
+/**
+ * @brief List of call instructions
+ */
+#define X86_64_CALL_MAP(xx) \
+    xx(ZYDIS_MNEMONIC_CALL)
+
+/**
+ * @brief List of relative address instructions
+ */
+#define X86_64_REL_INSN_MAP(xx)   \
+    X86_64_JCC_MAP(xx)  \
+    X86_64_JMP_MAP(xx)  \
+    X86_64_CALL_MAP(xx)
+
 typedef struct x86_64_patch_ctx
 {
     size_t      pos_insn;               /**< The insn current decode */
 }x86_64_patch_ctx_t;
 #define X86_64_PATCH_CTX_INIT { 0 }
 
+/**
+ * @see https://www.felixcloutier.com/x86/
+ */
 typedef struct x86_64_trampoline
 {
     uint8_t*    addr_target;                                    /**< Target function address */
@@ -326,15 +351,15 @@ static int _x86_64_is_near_size(ptrdiff_t addr_diff)
  * e9 4_byte_rel_addr
  * ```
  */
-static int _x86_64_fill_jump_code_near(uint8_t jump_code[5], ptrdiff_t addr_diff)
+static int _x86_64_fill_jump_code_near(uint8_t jump_code[X86_64_OPCODE_SIZE_JUMP_NEAR], ptrdiff_t addr_diff)
 {
     assert(_x86_64_is_near_size(addr_diff));
 
     jump_code[0] = 0xE9;
-    uint32_t code = (uint32_t)(addr_diff - 5);
+    uint32_t code = (uint32_t)(addr_diff - X86_64_OPCODE_SIZE_JUMP_NEAR);
     memcpy(&jump_code[1], &code, sizeof(code));
 
-    return 5;
+    return X86_64_OPCODE_SIZE_JUMP_NEAR;
 }
 
 /**
@@ -343,7 +368,7 @@ static int _x86_64_fill_jump_code_near(uint8_t jump_code[5], ptrdiff_t addr_diff
  * yo ur ad dr re ss he re     some random assembly
  * ```
  */
-static int _x86_64_fill_jump_code_far(uint8_t jump_code[14], void* dst_addr)
+static int _x86_64_fill_jump_code_far(uint8_t jump_code[X86_64_OPCODE_SIZE_JUMP_FAR], void* dst_addr)
 {
     jump_code[0] = 0xff;
     jump_code[1] = 0x25;
@@ -353,10 +378,10 @@ static int _x86_64_fill_jump_code_far(uint8_t jump_code[14], void* dst_addr)
     jump_code[5] = 0x00;
     uint64_t code = (uint64_t)(dst_addr);
     memcpy(&jump_code[6], &code, sizeof(code));
-    return 14;
+    return X86_64_OPCODE_SIZE_JUMP_FAR;
 }
 
-static int _x86_64_fill_jump_code(uint8_t jump_code[14], void* src, void* dst)
+static int _x86_64_fill_jump_code(uint8_t jump_code[X86_64_OPCODE_SIZE_JUMP_FAR], void* src, void* dst)
 {
     ptrdiff_t addr_diff = (uint8_t*)dst - (uint8_t*)src;
 
@@ -364,22 +389,16 @@ static int _x86_64_fill_jump_code(uint8_t jump_code[14], void* src, void* dst)
         _x86_64_fill_jump_code_near(jump_code, addr_diff) : _x86_64_fill_jump_code_far(jump_code, dst);
 }
 
-static size_t _x86_64_get_opcode_copy_size(const x86_64_trampoline_t* handle)
-{
-    size_t copy_size = handle->redirect_opcode[sizeof(handle->redirect_opcode) - 1] == X86_64_OPCODE_INT3 ? 5 : 14;
-    return copy_size;
-}
-
 static void _x86_64_do_inject(void* arg)
 {
     x86_64_trampoline_t* handle = arg;
-    memcpy(handle->addr_target, handle->redirect_opcode, _x86_64_get_opcode_copy_size(handle));
+    memcpy(handle->addr_target, handle->redirect_opcode, handle->redirect_size);
 }
 
 static void _x86_64_undo_inject(void* arg)
 {
     x86_64_trampoline_t* handle = arg;
-    memcpy(handle->addr_target, handle->backup_opcode, _x86_64_get_opcode_copy_size(handle));
+    memcpy(handle->addr_target, handle->backup_opcode, handle->redirect_size);
 }
 
 static ZydisAddressWidth _x86_64_get_address_width(void)
@@ -416,9 +435,7 @@ static ZydisMachineMode _x86_64_get_machine_mode(void)
  */
 static int _x86_64_patch_instruction(x86_64_trampoline_t* handle, x86_64_patch_ctx_t* patch, ZydisDecodedInstruction* insn)
 {
-    (void)handle;
-    (void)patch;
-    (void)insn;
+    (void)handle; (void)patch; (void)insn;
     // TODO
     return 0;
 }
@@ -449,18 +466,21 @@ static int _x86_64_generate_trampoline_opcode(x86_64_trampoline_t* handle)
     return 0;
 }
 
+/**
+ * @return bool
+ */
 static int _x86_64_is_jump_insn(ZydisMnemonic insn)
 {
-#define X86_64_EXPLAIN_JMP_MAP(x) \
+#define X86_64_EXPLAIN_JCC_MAP(x) \
     case x: return 1;
 
     switch (insn)
     {
-    X86_64_JUMP_INSN_MAP(X86_64_EXPLAIN_JMP_MAP)
+    X86_64_REL_INSN_MAP(X86_64_EXPLAIN_JCC_MAP)
     default:    return 0;
     }
 
-#undef X86_64_EXPLAIN_JMP_MAP
+#undef X86_64_EXPLAIN_JCC_MAP
 }
 
 static size_t _x86_64_calc_trampoline_size(const void* func, size_t func_size)
@@ -518,6 +538,13 @@ static int _x86_64_inline_hook_inject(void** origin, void* target, void* detour)
         _free_execute_memory(handle);
         return -1;
     }
+    if ((size_t)ret > target_func_size)
+    {
+        LOG("target(%p) size is too small, need(%zu) actual(%zu)", target, (size_t)ret, target_func_size);
+        _free_execute_memory(handle);
+        return -1;
+    }
+
     handle->redirect_size = ret;
     memcpy(handle->backup_opcode, target, ret);
     memcpy(handle->trampoline, target, target_func_size);
@@ -536,7 +563,7 @@ static int _x86_64_inline_hook_inject(void** origin, void* target, void* detour)
     }
 
     *origin = handle->trampoline;
-    _flush_instruction_cache(target, _x86_64_get_opcode_copy_size(handle));
+    _flush_instruction_cache(target, handle->redirect_size);
 
     return 0;
 }
@@ -548,7 +575,7 @@ static void _x86_64_inline_hook_uninject(void* origin)
     {
         assert(!"modify opcode failed");
     }
-    _flush_instruction_cache(handle->addr_target, _x86_64_get_opcode_copy_size(handle));
+    _flush_instruction_cache(handle->addr_target, handle->redirect_size);
     _free_execute_memory(handle);
 }
 
