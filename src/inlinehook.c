@@ -1,5 +1,5 @@
 #include "inlinehook.h"
-#define _GNU_SOURCE         /* See feature_test_macros(7) */
+#define _GNU_SOURCE
 #include <link.h>
 #include <stdlib.h>
 #include <assert.h>
@@ -278,6 +278,7 @@ static void _free_execute_memory(void* ptr)
 #include "Zydis/Zydis.h"
 
 #define X86_64_MAX_INSTRUCTION_SIZE         15
+#define X86_64_OPCODE_SIZE_JUMP_SHORT       2
 #define X86_64_OPCODE_SIZE_JUMP_NEAR        5
 #define X86_64_OPCODE_SIZE_JUMP_FAR         14
 #define X86_64_OPCODE_INT3                  (0xcc)
@@ -367,12 +368,25 @@ static int _x86_64_is_32bit_size(ptrdiff_t addr_diff)
     return -(ptrdiff_t)2147483648 <= addr_diff && addr_diff <= (ptrdiff_t)2147483647;
 }
 
+static int _x86_64_fill_jump_code_short(uint8_t jump_code[], size_t size, ptrdiff_t addr_diff)
+{
+    if (size < X86_64_OPCODE_SIZE_JUMP_SHORT)
+    {
+        return -1;
+    }
+
+    jump_code[0] = 0xeb;
+    jump_code[1] = addr_diff - X86_64_OPCODE_SIZE_JUMP_SHORT;
+
+    return X86_64_OPCODE_SIZE_JUMP_SHORT;
+}
+
 /**
  * ```
  * e9 4_byte_rel_addr
  * ```
  */
-static int _x86_64_fill_jump_code_near(uint8_t jump_code[X86_64_OPCODE_SIZE_JUMP_NEAR], size_t size, ptrdiff_t addr_diff)
+static int _x86_64_fill_jump_code_near(uint8_t jump_code[], size_t size, ptrdiff_t addr_diff)
 {
     assert(_x86_64_is_32bit_size(addr_diff));
     if (size < X86_64_OPCODE_SIZE_JUMP_NEAR)
@@ -393,7 +407,7 @@ static int _x86_64_fill_jump_code_near(uint8_t jump_code[X86_64_OPCODE_SIZE_JUMP
  * yo ur ad dr re ss he re     some random assembly
  * ```
  */
-static int _x86_64_fill_jump_code_far(uint8_t jump_code[X86_64_OPCODE_SIZE_JUMP_FAR], size_t size, void* dst_addr)
+static int _x86_64_fill_jump_code_far(uint8_t jump_code[], size_t size, void* dst_addr)
 {
     if (size < X86_64_OPCODE_SIZE_JUMP_FAR)
     {
@@ -422,8 +436,16 @@ static int _x86_64_fill_jump_code(uint8_t buffer[], size_t size, void* src_addr,
 {
     ptrdiff_t addr_diff = (uint8_t*)dst_addr - (uint8_t*)src_addr;
 
-    return _x86_64_is_32bit_size(addr_diff) ?
-        _x86_64_fill_jump_code_near(buffer, size, addr_diff) : _x86_64_fill_jump_code_far(buffer, size, dst_addr);
+    if (_x86_64_is_8bit_size(addr_diff))
+    {
+        return _x86_64_fill_jump_code_short(buffer, size, addr_diff);
+    }
+    if (_x86_64_is_32bit_size(addr_diff))
+    {
+        return _x86_64_fill_jump_code_near(buffer, size, addr_diff);
+    }
+
+    return _x86_64_fill_jump_code_far(buffer, size, dst_addr);
 }
 
 static void _x86_64_do_inject(void* arg)
