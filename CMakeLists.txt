@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.2)
+cmake_minimum_required(VERSION 3.3)
 project(uhook)
 
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/cmake")
@@ -28,6 +28,9 @@ if (CMAKE_SYSTEM_PROCESSOR STREQUAL "x86_64" OR CMAKE_SYSTEM_PROCESSOR STREQUAL 
             "src/arch_x86_64.c")
     add_subdirectory("third_party/zydis")
     target_link_libraries(${PROJECT_NAME} PRIVATE Zydis)
+elseif (CMAKE_SYSTEM_PROCESSOR STREQUAL "armv7l")
+    target_sources(${PROJECT_NAME} PRIVATE
+            "src/arch_arm.c")
 endif()
 
 # os specific
