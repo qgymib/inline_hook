@@ -1,4 +1,9 @@
-#include "arch_arm.h"
+#include "arch/arm.h"
+#include "os/os.h"
+#include <inttypes.h>
+#include <stddef.h>
+#include <assert.h>
+#include <string.h>
 
 typedef struct arm_convert_ctx
 {
@@ -67,7 +72,7 @@ static int _arm_fill_jump_code_near(uint32_t jump_code[1], intptr_t addr_diff)
 
 static int _arm_fill_jump_code_far(uint32_t jump_code[2], void* dest)
 {
-    assert(dest < 0xffffffff);
+    assert((uintptr_t)dest < (uintptr_t)0xffffffff);
     jump_code[0] = 0xe51ff004;
     jump_code[1] = (uint32_t)dest;
     return 2;
@@ -90,17 +95,17 @@ static int _arm_fill_jump_code(uint32_t jump_code[2], void* target, void* detour
     return _arm_fill_jump_code_far(jump_code, detour);
 }
 
+static size_t _arm_get_opcode_size(const arm_trampoline_t* handle)
+{
+	return handle->redirect_opcode[sizeof(handle->redirect_opcode) - 1] == 0 ? 1 : 2;
+}
+
 static void _arm_do_inject(void* arg)
 {
     arm_trampoline_t* handle = arg;
 
-    size_t copy_size = (handle->redirect_opcode[2] != 0 ? 3 : 1) * sizeof(uint32_t);
+    size_t copy_size = _arm_get_opcode_size(handle) * sizeof(uint32_t);
     memcpy(handle->addr_target, handle->redirect_opcode, copy_size);
-}
-
-static size_t _arm_get_opcode_size(const arm_trampoline_t* handle)
-{
-    return handle->redirect_opcode[sizeof(handle->redirect_opcode) - 1] == 0 ? 1 : 2;
 }
 
 /**
@@ -117,7 +122,7 @@ static size_t _arm_get_opcode_size(const arm_trampoline_t* handle)
  */
 static int _arm_try_convert_branch_insn(arm_trampoline_t* handle, arm_convert_ctx_t* ctx)
 {
-    uin32_t insn = handle->addr_target[ctx->i_offset];
+    uint32_t insn = handle->addr_target[ctx->i_offset];
     switch (insn & 0xff000000)
     {
     case 0xea000000:    /* b */

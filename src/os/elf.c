@@ -3,8 +3,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include "uhook.h"
-#include "elfparser.h"
-#include "os_elf.h"
+#include "os/elfparser.h"
+#include "os/elf.h"
 
 #define INLINE_HOOK_DEBUG
 #include "log.h"

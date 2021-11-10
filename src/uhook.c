@@ -2,10 +2,10 @@
 #include <string.h>
 #include "once.h"
 
-#include "os_elf.h"
+#include "os/elf.h"
 
-#include "arch_arm.h"
-#include "arch_x86_64.h"
+#include "arch/arm.h"
+#include "arch/x86_64.h"
 
 #define INLINE_HOOK_DEBUG
 #include "log.h"
