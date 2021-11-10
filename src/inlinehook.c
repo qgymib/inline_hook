@@ -101,9 +101,9 @@ static size_t _get_function_size(const void* addr)
     }
 
     size_t idx;
-    for (idx = 0; idx < info->file_hdr.e_shnum; idx++)
+    for (idx = 0; idx < info->ehdr.e_shnum; idx++)
     {
-        if (info->section_hdr[idx].sh_type == 0x02 || info->section_hdr[idx].sh_type == 0x0b)
+        if (info->shdr[idx].sh_type == 0x02 || info->shdr[idx].sh_type == 0x0b)
         {
             int num = elf_parser_symbol(&symbol_list, info, idx);
 

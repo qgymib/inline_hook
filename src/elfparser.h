@@ -17,7 +17,7 @@ enum elf_source_type
  * @brief 
  * @see https://en.wikipedia.org/wiki/Executable_and_Linkable_Format
  */
-typedef struct elf_file_header
+typedef struct elf_ehdr
 {
     /**
      * 0x7F followed by ELF(45 4c 46) in ASCII; these four bytes constitute the magic number.
@@ -167,9 +167,9 @@ typedef struct elf_file_header
      * Contains index of the section header table entry that contains the section names.
      */
     uint16_t e_shstrndx;
-}elf_file_header_t;
+}elf_ehdr_t;
 
-typedef struct elf_program_header
+typedef struct elf_phdr
 {
     /**
      * Identifies the type of the segment.
@@ -226,9 +226,9 @@ typedef struct elf_program_header
      * power of 2, with p_vaddr equating p_offset modulus p_align.
      */
     uint64_t p_align;
-}elf_program_header_t;
+}elf_phdr_t;
 
-typedef struct elf_section_header
+typedef struct elf_shdr
 {
     /**
      * An offset to a string in the `.shstrtab` section that represents the name of this section.
@@ -325,13 +325,13 @@ typedef struct elf_section_header
      * Otherwise, this field contains zero.
      */
     uint64_t sh_entsize;
-}elf_section_header_t;
+}elf_shdr_t;
 
 typedef struct elf_info
 {
-    elf_file_header_t           file_hdr;       /**< File header */
-    elf_program_header_t*       program_hdr;    /**< A list of program header */
-    elf_section_header_t*       section_hdr;    /**< A list of section header */
+    elf_ehdr_t                  ehdr;       /**< File header */
+    elf_phdr_t*                 phdr;       /**< A list of program header */
+    elf_shdr_t*                 shdr;       /**< A list of section header */
 
     struct 
     {
@@ -418,7 +418,7 @@ void elf_release_symbol(elf_symbol_t* symbols);
  * @param[in] size  Length of buffer
  * @return          How many bytes read
  */
-int elf_parser_file_header(elf_file_header_t* dst, const void* addr, size_t size);
+int elf_parser_ehdr(elf_ehdr_t* dst, const void* addr, size_t size);
 
 /**
  * @brief Parser program header
@@ -429,8 +429,8 @@ int elf_parser_file_header(elf_file_header_t* dst, const void* addr, size_t size
  * @param[in] idx       Which header you want to parser
  * @return              Result
  */
-int elf_parser_program_header(elf_program_header_t* dst,
-    const elf_file_header_t* header, const void* addr, size_t size, size_t idx);
+int elf_parser_phdr(elf_phdr_t* dst,
+    const elf_ehdr_t* header, const void* addr, size_t size, size_t idx);
 
 /**
  * @brief Parser section header
@@ -441,8 +441,8 @@ int elf_parser_program_header(elf_program_header_t* dst,
  * @param[in] idx       Which header you want to parser
  * @return              Result
  */
-int elf_parser_section_header(elf_section_header_t* dst,
-    const elf_file_header_t* header, const void* addr, size_t size, size_t idx);
+int elf_parser_shdr(elf_shdr_t* dst,
+    const elf_ehdr_t* header, const void* addr, size_t size, size_t idx);
 
 /**
  * @brief Dump ELF information from buffer

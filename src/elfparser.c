@@ -126,8 +126,8 @@ static uint64_t _elf_parser_64bit(const uint8_t* pdat, int f_EI_DATA)
     return elf_u64.val;
 }
 
-static int _elf_parser_program32_header(elf_program_header_t* dst,
-    const elf_file_header_t* header, const uint8_t* pdat, size_t size)
+static int _elf_parser_program32_header(elf_phdr_t* dst,
+    const elf_ehdr_t* header, const uint8_t* pdat, size_t size)
 {
     size_t pos = 0;
     if (size < ELF_PROGRAM_HEADER_32_SIZE)
@@ -162,8 +162,8 @@ static int _elf_parser_program32_header(elf_program_header_t* dst,
     return 0;
 }
 
-static int _elf_parser_program64_header(elf_program_header_t* dst,
-    const elf_file_header_t* header, const uint8_t* pdat, size_t size)
+static int _elf_parser_program64_header(elf_phdr_t* dst,
+    const elf_ehdr_t* header, const uint8_t* pdat, size_t size)
 {
     size_t pos = 0;
     if (size < ELF_PROGRAM_HEADER_64_SIZE)
@@ -322,7 +322,7 @@ static const char* _elf_dump_header_get_machine(uint16_t e_machine)
     }
 }
 
-static int _elf_dump_header(FILE* io, const elf_file_header_t* header)
+static int _elf_dump_header(FILE* io, const elf_ehdr_t* header)
 {
     return fprintf(io,
         "Class:                             %s\n"
@@ -386,7 +386,7 @@ static const char* _elf_dump_program_header_get_type(uint32_t p_type)
     }
 }
 
-static int _elf_dump_program_header(FILE* io, const elf_program_header_t* program_hdr, int is_64bit)
+static int _elf_dump_program_header(FILE* io, const elf_phdr_t* program_hdr, int is_64bit)
 {
     const int ptr_width = is_64bit ? 16 : 8;
 
@@ -402,8 +402,8 @@ static int _elf_dump_program_header(FILE* io, const elf_program_header_t* progra
         program_hdr->p_align);
 }
 
-static int _elf_parser_section32_header(elf_section_header_t* dst,
-    const elf_file_header_t* header, const uint8_t* pdat, size_t size)
+static int _elf_parser_section32_header(elf_shdr_t* dst,
+    const elf_ehdr_t* header, const uint8_t* pdat, size_t size)
 {
     size_t pos = 0;
     if (size < ELF_SECTION_HEADER_32_SIZE)
@@ -444,8 +444,8 @@ static int _elf_parser_section32_header(elf_section_header_t* dst,
     return 0;
 }
 
-static int _elf_parser_section64_header(elf_section_header_t* dst,
-    const elf_file_header_t* header, const uint8_t* pdat, size_t size)
+static int _elf_parser_section64_header(elf_shdr_t* dst,
+    const elf_ehdr_t* header, const uint8_t* pdat, size_t size)
 {
     size_t pos = 0;
     if (size < ELF_SECTION_HEADER_64_SIZE)
@@ -486,8 +486,8 @@ static int _elf_parser_section64_header(elf_section_header_t* dst,
     return 0;
 }
 
-static int _elf_parser_program_header_ext(elf_program_header_t* dst,
-    const elf_file_header_t* header, const void* addr, size_t size)
+static int _elf_parser_program_header_ext(elf_phdr_t* dst,
+    const elf_ehdr_t* header, const void* addr, size_t size)
 {
     if (header->f_EI_CLASS == 1)
     {
@@ -500,8 +500,8 @@ static int _elf_parser_program_header_ext(elf_program_header_t* dst,
     return -1;
 }
 
-static int _elf_parser_section_header_ext(elf_section_header_t* dst,
-    const elf_file_header_t* header, const uint8_t* pdat, size_t size)
+static int _elf_parser_section_header_ext(elf_shdr_t* dst,
+    const elf_ehdr_t* header, const uint8_t* pdat, size_t size)
 {
     if (header->f_EI_CLASS == 1)
     {
@@ -541,7 +541,7 @@ static const char* _elf_dump_secion_header_get_type(uint32_t sh_type)
     }
 }
 
-static int _elf_dump_section_header(FILE* io, const elf_section_header_t* section_hdr, int is_64bit)
+static int _elf_dump_section_header(FILE* io, const elf_shdr_t* section_hdr, int is_64bit)
 {
     const int ptr_width = is_64bit ? 16 : 8;
 
@@ -573,7 +573,7 @@ static int _elf_dump_print_program_title(FILE* io, uint8_t f_EI_CLASS)
         "[Align]");
 }
 
-static int _elf_parser_file_header_from_file(elf_file_header_t* dst, FILE* src)
+static int _elf_parser_file_header_from_file(elf_ehdr_t* dst, FILE* src)
 {
     uint8_t cache[ELF_FILE_HEADER_64_SIZE];
     
@@ -583,11 +583,11 @@ static int _elf_parser_file_header_from_file(elf_file_header_t* dst, FILE* src)
     }
 
     size_t read_size = fread(cache, 1, ELF_FILE_HEADER_64_SIZE, src);
-    return elf_parser_file_header(dst, cache, read_size);
+    return elf_parser_ehdr(dst, cache, read_size);
 }
 
-static int _elf_parser_program_header_from_file(elf_program_header_t* dst,
-    FILE* file, const elf_file_header_t* file_hdr, size_t idx)
+static int _elf_parser_program_header_from_file(elf_phdr_t* dst,
+    FILE* file, const elf_ehdr_t* file_hdr, size_t idx)
 {
     uint8_t cache[ELF_PROGRAM_HEADER_64_SIZE];
     size_t target_pos = file_hdr->e_phoff + idx * file_hdr->e_phentsize;
@@ -619,8 +619,8 @@ static int _elf_dump_print_section_title(FILE* io, uint8_t f_EI_CLASS)
         str_width, "[sh_entsize]");
 }
 
-static int _elf_parser_section_header_from_file(elf_section_header_t* dst, FILE* file,
-    const elf_file_header_t* file_hdr, size_t idx)
+static int _elf_parser_section_header_from_file(elf_shdr_t* dst, FILE* file,
+    const elf_ehdr_t* file_hdr, size_t idx)
 {
     uint8_t cache[ELF_SECTION_HEADER_64_SIZE];
     size_t target_pos = file_hdr->e_shoff + idx * file_hdr->e_shentsize;
@@ -637,7 +637,7 @@ static int _elf_parser_symbol32(elf_symbol_t* symbol_list, const elf_info_t* inf
 {
     uint8_t buffer[ELF_SYMBOL_32_SIZE];
     FILE* file = info->data.source.as_file;
-    int f_EI_DATA = info->file_hdr.f_EI_DATA;
+    int f_EI_DATA = info->ehdr.f_EI_DATA;
 
     size_t idx;
     for (idx = 0; idx < num; idx++)
@@ -663,7 +663,7 @@ static int _elf_parser_symbol64(elf_symbol_t* symbol_list, const elf_info_t* inf
 {
     uint8_t buffer[ELF_SYMBOL_64_SIZE];
     FILE* file = info->data.source.as_file;
-    int f_EI_DATA = info->file_hdr.f_EI_DATA;
+    int f_EI_DATA = info->ehdr.f_EI_DATA;
 
     size_t idx;
     for (idx = 0; idx < num; idx++)
@@ -685,25 +685,25 @@ static int _elf_parser_symbol64(elf_symbol_t* symbol_list, const elf_info_t* inf
     return 0;
 }
 
-static int _elf_parser_symbol(elf_symbol_t* symbol_list, const elf_info_t* info, const elf_section_header_t* section_hdr, size_t num)
+static int _elf_parser_symbol(elf_symbol_t* symbol_list, const elf_info_t* info, const elf_shdr_t* section_hdr, size_t num)
 {
     if (fseek(info->data.source.as_file, section_hdr->sh_offset, SEEK_SET) != 0)
     {
         return -1;
     }
 
-    if (info->file_hdr.f_EI_CLASS == 1)
+    if (info->ehdr.f_EI_CLASS == 1)
     {
         return _elf_parser_symbol32(symbol_list, info, num);
     }
-    else if (info->file_hdr.f_EI_CLASS == 2)
+    else if (info->ehdr.f_EI_CLASS == 2)
     {
         return _elf_parser_symbol64(symbol_list, info, num);
     }
     return -1;
 }
 
-int elf_parser_file_header(elf_file_header_t* dst, const void* addr, size_t size)
+int elf_parser_ehdr(elf_ehdr_t* dst, const void* addr, size_t size)
 {
     const uint8_t* pdat = addr;
     int pos = 0;
@@ -800,8 +800,8 @@ int elf_parser_file_header(elf_file_header_t* dst, const void* addr, size_t size
     return pos;
 }
 
-int elf_parser_program_header(elf_program_header_t* dst,
-    const elf_file_header_t* header, const void* addr, size_t size, size_t idx)
+int elf_parser_phdr(elf_phdr_t* dst,
+    const elf_ehdr_t* header, const void* addr, size_t size, size_t idx)
 {
     const uint8_t* max_pdat_pos = (uint8_t*)addr + size;
     const uint8_t* pdat = (uint8_t*)addr + header->e_phoff + idx * header->e_phentsize;
@@ -814,8 +814,8 @@ int elf_parser_program_header(elf_program_header_t* dst,
     return _elf_parser_program_header_ext(dst, header, pdat, left_size);
 }
 
-int elf_parser_section_header(elf_section_header_t* dst,
-    const elf_file_header_t* header, const void* addr, size_t size, size_t idx)
+int elf_parser_shdr(elf_shdr_t* dst,
+    const elf_ehdr_t* header, const void* addr, size_t size, size_t idx)
 {
     const uint8_t* max_pdat_pos = (uint8_t*)addr + size;
     const uint8_t* pdat = (uint8_t*)addr + header->e_shoff + idx * header->e_shentsize;
@@ -834,8 +834,8 @@ int elf_dump_buffer(FILE* io, const void* buffer, size_t size)
     size_t idx;
     int size_written = 0;
 
-    elf_file_header_t file_hdr;
-    if ((ret = elf_parser_file_header(&file_hdr, buffer, size)) < 0)
+    elf_ehdr_t file_hdr;
+    if ((ret = elf_parser_ehdr(&file_hdr, buffer, size)) < 0)
     {
         return ret;
     }
@@ -845,7 +845,7 @@ int elf_dump_buffer(FILE* io, const void* buffer, size_t size)
     }
     size_written += ret;
 
-    elf_program_header_t program_hdr;
+    elf_phdr_t program_hdr;
     if ((ret = _elf_dump_print_program_title(io, file_hdr.f_EI_CLASS)) < 0)
     {
         return ret;
@@ -854,7 +854,7 @@ int elf_dump_buffer(FILE* io, const void* buffer, size_t size)
 
     for (idx = 0; idx < file_hdr.e_phnum; idx++)
     {
-        if ((ret = elf_parser_program_header(&program_hdr, &file_hdr, buffer, size, idx)) < 0)
+        if ((ret = elf_parser_phdr(&program_hdr, &file_hdr, buffer, size, idx)) < 0)
         {
             return ret;
         }
@@ -866,16 +866,16 @@ int elf_dump_buffer(FILE* io, const void* buffer, size_t size)
         size_written += ret;
     }
 
-    elf_section_header_t shstrtab_hdr;
-    if ((ret = elf_parser_section_header(&shstrtab_hdr, &file_hdr, buffer, size, file_hdr.e_shstrndx)) < 0)
+    elf_shdr_t shstrtab_hdr;
+    if ((ret = elf_parser_shdr(&shstrtab_hdr, &file_hdr, buffer, size, file_hdr.e_shstrndx)) < 0)
     {
         return ret;
     }
 
-    elf_section_header_t section_hdr;
+    elf_shdr_t section_hdr;
     for (idx = 0; idx < file_hdr.e_shnum; idx++)
     {
-        if ((ret = elf_parser_section_header(&section_hdr, &file_hdr, buffer, size, idx)) < 0)
+        if ((ret = elf_parser_shdr(&section_hdr, &file_hdr, buffer, size, idx)) < 0)
         {
             return ret;
         }
@@ -895,37 +895,37 @@ int elf_parser_file(elf_info_t** dst, FILE* file)
     int ret;
     size_t idx;
 
-    elf_file_header_t file_hdr;
+    elf_ehdr_t file_hdr;
     if ((ret = _elf_parser_file_header_from_file(&file_hdr, file)) < 0)
     {
         return ret;
     }
 
-    elf_info_t* info = malloc(sizeof(elf_info_t) + sizeof(elf_program_header_t) * file_hdr.e_phnum
-        + sizeof(elf_section_header_t) * file_hdr.e_shnum);
+    elf_info_t* info = malloc(sizeof(elf_info_t) + sizeof(elf_phdr_t) * file_hdr.e_phnum
+        + sizeof(elf_shdr_t) * file_hdr.e_shnum);
     if (info == NULL)
     {
         return -1;
     }
-    memcpy(&info->file_hdr, &file_hdr, sizeof(file_hdr));
+    memcpy(&info->ehdr, &file_hdr, sizeof(file_hdr));
     info->data.source_type = ELF_SOURCE_POSIX_FILE;
     info->data.source.as_file = file;
 
-    info->program_hdr = (elf_program_header_t*)((uint8_t*)info + sizeof(elf_info_t));
+    info->phdr = (elf_phdr_t*)((uint8_t*)info + sizeof(elf_info_t));
     for (idx = 0; idx < file_hdr.e_phnum; idx++)
     {
-        if ((ret = _elf_parser_program_header_from_file(&info->program_hdr[idx], file, &file_hdr, idx)) < 0)
+        if ((ret = _elf_parser_program_header_from_file(&info->phdr[idx], file, &file_hdr, idx)) < 0)
         {
             free(info);
             return ret;
         }
     }
 
-    info->section_hdr = (elf_section_header_t*)((uint8_t*)info + sizeof(elf_info_t) +
-        sizeof(elf_program_header_t) * file_hdr.e_phnum);
+    info->shdr = (elf_shdr_t*)((uint8_t*)info + sizeof(elf_info_t) +
+        sizeof(elf_phdr_t) * file_hdr.e_phnum);
     for (idx = 0; idx < file_hdr.e_shnum; idx++)
     {
-        if ((ret = _elf_parser_section_header_from_file(&info->section_hdr[idx], file, &file_hdr, idx)) < 0)
+        if ((ret = _elf_parser_section_header_from_file(&info->shdr[idx], file, &file_hdr, idx)) < 0)
         {
             free(info);
             return ret;
@@ -942,36 +942,36 @@ int elf_dump_info(FILE* io, const elf_info_t* info)
     size_t idx;
     int written_size = 0;
 
-    if ((ret = _elf_dump_header(io, &info->file_hdr)) < 0)
+    if ((ret = _elf_dump_header(io, &info->ehdr)) < 0)
     {
         return ret;
     }
     written_size += ret;
 
-    if ((ret = _elf_dump_print_program_title(io, info->file_hdr.f_EI_CLASS)) < 0)
+    if ((ret = _elf_dump_print_program_title(io, info->ehdr.f_EI_CLASS)) < 0)
     {
         return ret;
     }
     written_size += ret;
 
-    for (idx = 0; idx < info->file_hdr.e_phnum; idx++)
+    for (idx = 0; idx < info->ehdr.e_phnum; idx++)
     {
-        if ((ret = _elf_dump_program_header(io, &info->program_hdr[idx], info->file_hdr.f_EI_CLASS == 2)) < 0)
+        if ((ret = _elf_dump_program_header(io, &info->phdr[idx], info->ehdr.f_EI_CLASS == 2)) < 0)
         {
             return ret;
         }
         written_size += ret;
     }
 
-    if ((ret = _elf_dump_print_section_title(io, info->file_hdr.f_EI_CLASS)) < 0)
+    if ((ret = _elf_dump_print_section_title(io, info->ehdr.f_EI_CLASS)) < 0)
     {
         return ret;
     }
     written_size += ret;
 
-    for (idx = 0; idx < info->file_hdr.e_shnum; idx++)
+    for (idx = 0; idx < info->ehdr.e_shnum; idx++)
     {
-        if ((ret = _elf_dump_section_header(io, &info->section_hdr[idx], info->file_hdr.f_EI_CLASS == 2)) < 0)
+        if ((ret = _elf_dump_section_header(io, &info->shdr[idx], info->ehdr.f_EI_CLASS == 2)) < 0)
         {
             return ret;
         }
@@ -993,26 +993,26 @@ void elf_release_symbol(elf_symbol_t* symbols)
 
 int elf_parser_symbol(elf_symbol_t** dst, const elf_info_t* info, size_t idx)
 {
-    if (idx >= info->file_hdr.e_shnum)
+    if (idx >= info->ehdr.e_shnum)
     {
         return -1;
     }
 
     /* Symbol entry should be 16 bytes (32-bit) or 24 bytes (64-bit) */
-    if (info->section_hdr[idx].sh_entsize != ELF_SYMBOL_32_SIZE
-        && info->section_hdr[idx].sh_entsize != ELF_SYMBOL_64_SIZE)
+    if (info->shdr[idx].sh_entsize != ELF_SYMBOL_32_SIZE
+        && info->shdr[idx].sh_entsize != ELF_SYMBOL_64_SIZE)
     {
         return -1;
     }
 
-    int num = info->section_hdr[idx].sh_size / info->section_hdr[idx].sh_entsize;
+    int num = info->shdr[idx].sh_size / info->shdr[idx].sh_entsize;
     elf_symbol_t* symbol_list = malloc(sizeof(elf_symbol_t) * num);
     if (symbol_list == NULL)
     {
         return -1;
     }
 
-    int ret = _elf_parser_symbol(symbol_list, info, &info->section_hdr[idx], num);
+    int ret = _elf_parser_symbol(symbol_list, info, &info->shdr[idx], num);
     if (ret < 0)
     {
         free(symbol_list);

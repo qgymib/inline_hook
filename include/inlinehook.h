@@ -33,4 +33,3 @@ int inline_hook_dump(char* buffer, unsigned size, const void* origin);
 }
 #endif
 #endif
-
