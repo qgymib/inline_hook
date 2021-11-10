@@ -13,6 +13,12 @@ enum uhook_errno
     UHOOK_NOFUNCSIZE    = -4,   /**< Can not get function size, may be stripped? */
 };
 
+typedef struct uhook_token
+{
+    void*   fn_call;    /**< Original function, cast to original protocol to call it. */
+    void*   token;      /**< Inject token */
+}uhook_token_t;
+
 /**
  * @brief Inject function
  * @param[out] origin       Inject Context, also can be called as original function.
@@ -21,13 +27,13 @@ enum uhook_errno
  * @param[in] detour        The function to replace original function
  * @return                  Inject result
  */
-int uhook_inject(void** origin, void* target, void* detour);
+int uhook_inject(uhook_token_t* token, void* target, void* detour);
 
 /**
  * @brief Uninject function
  * @param[in,out] origin    The context to be uninject. This value will be set to NULL.
  */
-void uhook_uninject(void** origin);
+void uhook_uninject(uhook_token_t* token);
 
 #ifdef __cplusplus
 }

@@ -29,14 +29,13 @@ TEST(simple)
 {
     ASSERT_EQ_D32(sum(1, 10), 55);
 
-    fn_sig fn_orig;
-    ASSERT_EQ_D32(uhook_inject((void**)&fn_orig, (void*)sum, (void*)del), 0);
-    ASSERT_NE_PTR(fn_orig, NULL);
+    uhook_token_t token;
+    ASSERT_EQ_D32(uhook_inject(&token, (void*)sum, (void*)del), 0);
+    ASSERT_NE_PTR(token.fn_call, NULL);
 
     ASSERT_EQ_D32(sum(1, 10), -55);
-    ASSERT_EQ_D32(fn_orig(1, 10), 55);
+    ASSERT_EQ_D32(((fn_sig)token.fn_call)(1, 10), 55);
 
-    uhook_uninject((void**)&fn_orig);
-    ASSERT_EQ_PTR(fn_orig, NULL);
+    uhook_uninject(&token);
     ASSERT_EQ_D32(sum(1, 10), 55);
 }

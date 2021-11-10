@@ -38,16 +38,18 @@
     (((uintptr_t)(size) + ((uintptr_t)(align) - 1)) & ~((uintptr_t)(align) - 1))
 
 #define INLINE_HOOK_MAKE_INTERFACE(fn_inject, fn_uninject) \
-    int uhook_inject(void** origin, void* target, void* detour) {\
+    int uhook_inject(uhook_token_t* token, void* target, void* detour) {\
         int ret;\
-        if ((ret = fn_inject(origin, target, detour)) != 0) {\
-            *origin = NULL;\
+        if ((ret = fn_inject(token, target, detour)) != UHOOK_SUCCESS) {\
+            token->fn_call = NULL;\
+            token->token = NULL;\
         }\
         return ret;\
     }\
-    void uhook_uninject(void** origin) {\
-        fn_uninject(*origin);\
-        *origin = NULL;\
+    void uhook_uninject(uhook_token_t* token) {\
+        fn_uninject(token);\
+        token->fn_call = NULL;\
+        token->token = NULL;\
     }
 
 static size_t _get_page_size(void)
@@ -725,7 +727,7 @@ static size_t _x86_64_calc_trampoline_size(const void* func, size_t func_size)
     return func_size + jmp_far_size;
 }
 
-static int _x86_64_inline_hook_inject(void** origin, void* target, void* detour)
+static int _x86_64_inline_hook_inject(uhook_token_t* token, void* target, void* detour)
 {
     int ret;
     size_t target_func_size = _get_function_size(target);
@@ -781,21 +783,22 @@ static int _x86_64_inline_hook_inject(void** origin, void* target, void* detour)
         return -1;
     }
 
-    *origin = handle->trampoline;
+    token->fn_call = handle->trampoline;
+    token->token = handle;
     _flush_instruction_cache(target, handle->redirect_size);
 
     return UHOOK_SUCCESS;
 }
 
-static void _x86_64_inline_hook_uninject(void* origin)
+static void _x86_64_inline_hook_uninject(uhook_token_t* token)
 {
-    x86_64_trampoline_t* handle = container_of(origin, x86_64_trampoline_t, trampoline);
+    x86_64_trampoline_t* handle = token->token;
     if (_system_modify_opcode(handle->addr_target, sizeof(handle->redirect_opcode), _x86_64_undo_inject, handle) > 0)
     {
         assert(!"modify opcode failed");
     }
     _flush_instruction_cache(handle->addr_target, handle->redirect_size);
-    _free_execute_memory(handle);
+    _free_execute_memory(token->token);
 }
 
 INLINE_HOOK_MAKE_INTERFACE(_x86_64_inline_hook_inject, _x86_64_inline_hook_uninject)
