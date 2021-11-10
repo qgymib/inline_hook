@@ -2,7 +2,6 @@
 
 typedef int(*fn_sig)(int, int);
 
-DISABLE_OPTIMIZE
 static int add(int a, int b)
 {
 	return a + b;
@@ -13,6 +12,7 @@ static int del(int a, int b)
 	return a - b;
 }
 
+DISABLE_OPTIMIZE
 TEST(simple)
 {
 	ASSERT_EQ_D32(add(1, 2), 3);

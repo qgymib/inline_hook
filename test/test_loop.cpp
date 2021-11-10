@@ -2,7 +2,6 @@
 
 typedef int(*fn_sig)(int, int);
 
-DISABLE_OPTIMIZE
 static int sum(int a, int b)
 {
     int i;
@@ -25,6 +24,7 @@ static int del(int a, int b)
     return ret;
 }
 
+DISABLE_OPTIMIZE
 TEST(simple)
 {
     ASSERT_EQ_D32(sum(1, 10), 55);

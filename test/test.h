@@ -141,9 +141,9 @@ extern "C" {
 #define _ASSERT_INTERNAL_HELPER_GE(a, b)						((a) >= (b))
 
 #define TEST(name)	\
+    static void run_test_##name(void);\
     test_global_ctx_t	__test_ctx = { 0, NULL, EXIT_SUCCESS, { 0 } };\
     jmp_buf				__test_jmp;\
-    static void run_test_##name(void);\
     int main(int argc, char* argv[]) {\
         __test_ctx.argc = argc; __test_ctx.argv = argv;\
         {\
