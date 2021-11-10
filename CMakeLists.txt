@@ -4,10 +4,8 @@ project(uhook)
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/cmake")
 
 add_library(${PROJECT_NAME}
-    "src/elfparser.c"
     "src/log.c"
     "src/once.c"
-    "src/os_elf.c"
     "src/uhook.c")
 
 target_include_directories(${PROJECT_NAME}
@@ -24,12 +22,20 @@ else ()
     target_compile_options(${PROJECT_NAME} PRIVATE -Wall -Wextra -Werror)
 endif ()
 
+# arch specific
 if (CMAKE_SYSTEM_PROCESSOR STREQUAL "x86_64" OR CMAKE_SYSTEM_PROCESSOR STREQUAL "AMD64")
+    target_sources(${PROJECT_NAME} PRIVATE
+            "src/arch_x86_64.c")
     add_subdirectory("third_party/zydis")
-    target_link_libraries(${PROJECT_NAME}
-        PRIVATE
-            Zydis)
+    target_link_libraries(${PROJECT_NAME} PRIVATE Zydis)
 endif()
+
+# os specific
+if (UNIX)
+    target_sources(${PROJECT_NAME} PRIVATE
+            "src/elfparser.c"
+            "src/os_elf.c")
+endif ()
 
 if (CMAKE_PROJECT_NAME STREQUAL PROJECT_NAME)
     include(CTest)

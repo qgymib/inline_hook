@@ -5,6 +5,7 @@ extern "C" {
 #endif
 
 #include "defs.h"
+#include <stddef.h>
 
 API_LOCAL int elf_inject_got_patch(void** token, void** fn_call, const char* name, void* detour);
 

@@ -25,10 +25,10 @@ TEST(callback)
 
     uhook_token_t token;
     ASSERT_EQ_D32(uhook_inject(&token, (void*)add, (void*)del), 0);
-    ASSERT_NE_PTR(token.fn_call, NULL);
+    ASSERT_NE_PTR(token.fcall, NULL);
 
     ASSERT_EQ_D32(add(1, 2, _callback_square), 1);
-    ASSERT_EQ_D32(((fn_sig)token.fn_call)(1, 2, _callback_square), 9);
+    ASSERT_EQ_D32(((fn_sig)token.fcall)(1, 2, _callback_square), 9);
 
     uhook_uninject(&token);
     ASSERT_EQ_D32(add(1, 2, _callback_square), 9);

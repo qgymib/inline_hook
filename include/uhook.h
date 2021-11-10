@@ -16,7 +16,7 @@ enum uhook_errno
 
 typedef struct uhook_token
 {
-    void*           fn_call;    /**< Original function, cast to original protocol to call it. */
+    void*           fcall;      /**< Original function, cast to original protocol to call it. */
     unsigned long   attrs;      /**< Attributes */
     void*           token;      /**< Inject token */
 }uhook_token_t;

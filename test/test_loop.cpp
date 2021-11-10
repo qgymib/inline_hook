@@ -31,10 +31,10 @@ TEST(simple)
 
     uhook_token_t token;
     ASSERT_EQ_D32(uhook_inject(&token, (void*)sum, (void*)del), 0);
-    ASSERT_NE_PTR(token.fn_call, NULL);
+    ASSERT_NE_PTR(token.fcall, NULL);
 
     ASSERT_EQ_D32(sum(1, 10), -55);
-    ASSERT_EQ_D32(((fn_sig)token.fn_call)(1, 10), 55);
+    ASSERT_EQ_D32(((fn_sig)token.fcall)(1, 10), 55);
 
     uhook_uninject(&token);
     ASSERT_EQ_D32(sum(1, 10), 55);
