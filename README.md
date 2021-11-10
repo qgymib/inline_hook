@@ -1,2 +1,4 @@
-# inline_hook
+# uhook
+
+A universal hook library.
 

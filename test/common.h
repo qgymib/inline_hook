@@ -5,7 +5,7 @@ extern "C" {
 #endif
 
 #include "test.h"
-#include "inlinehook.h"
+#include "uhook.h"
 #include <stdio.h>
 
 #if defined(__GNUC__) || defined(__clang__)

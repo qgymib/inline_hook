@@ -1,13 +1,13 @@
 cmake_minimum_required(VERSION 3.2)
-project(inlinehook)
+project(uhook)
 
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/cmake")
 
 add_library(${PROJECT_NAME}
-    src/elfparser.c
-    src/inlinehook.c
-    src/log.c
-    src/once.c)
+    "src/elfparser.c"
+    "src/uhook.c"
+    "src/log.c"
+    "src/once.c")
 
 target_include_directories(${PROJECT_NAME}
     PUBLIC
