@@ -731,7 +731,7 @@ static int _x86_64_inline_hook_inject(void** origin, void* target, void* detour)
     size_t target_func_size = _get_function_size(target);
     if (target_func_size == (size_t)-1)
     {
-        return -1;
+        return INLINK_HOOK_NOFUNCSIZE;
     }
 
     size_t trampoline_size = _x86_64_calc_trampoline_size(target, target_func_size);
@@ -740,7 +740,8 @@ static int _x86_64_inline_hook_inject(void** origin, void* target, void* detour)
     x86_64_trampoline_t* handle = _alloc_execute_memory(malloc_size);
     if (handle == NULL)
     {
-        return -1;
+        LOG("alloc execute memory with size(%zu) failed", malloc_size);
+        return INLINK_HOOK_NOMEM;
     }
     memset(handle, X86_64_OPCODE_INT3, malloc_size);
 
@@ -754,13 +755,13 @@ static int _x86_64_inline_hook_inject(void** origin, void* target, void* detour)
     {
         LOG("generate redirect opcode failed");
         _free_execute_memory(handle);
-        return -1;
+        return INLINK_HOOK_UNKNOWN;
     }
     if ((size_t)ret > target_func_size)
     {
         LOG("target(%p) size is too small, need(%zu) actual(%zu)", target, (size_t)ret, target_func_size);
         _free_execute_memory(handle);
-        return -1;
+        return INLINK_HOOK_SMALLFUNC;
     }
 
     handle->redirect_size = ret;
@@ -771,7 +772,7 @@ static int _x86_64_inline_hook_inject(void** origin, void* target, void* detour)
     if (_x86_64_generate_trampoline_opcode(handle) < 0)
     {
         _free_execute_memory(handle);
-        return -1;
+        return INLINK_HOOK_UNKNOWN;
     }
 
     if (_system_modify_opcode(target, sizeof(handle->redirect_opcode), _x86_64_do_inject, handle) < 0)
@@ -783,7 +784,7 @@ static int _x86_64_inline_hook_inject(void** origin, void* target, void* detour)
     *origin = handle->trampoline;
     _flush_instruction_cache(target, handle->redirect_size);
 
-    return 0;
+    return INLINK_HOOK_SUCCESS;
 }
 
 static void _x86_64_inline_hook_uninject(void* origin)
