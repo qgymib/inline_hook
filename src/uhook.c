@@ -1,12 +1,10 @@
 #include "uhook.h"
-#define _GNU_SOURCE
-#include <link.h>
 #include <stdlib.h>
 #include <assert.h>
 #include <inttypes.h>
 #include <string.h>
 #include "once.h"
-#include "elfparser.h"
+#include "os_elf.h"
 
 #if defined(_WIN32)
 #   include <windows.h>
@@ -18,6 +16,9 @@
 
 #define INLINE_HOOK_DEBUG
 #include "log.h"
+
+#define UHOOK_ATTR_INLINE   1
+#define UHOOK_ATTR_GOTPLT   2
 
 /**
  * @brief Cast a member of a structure out to the containing structure
@@ -37,21 +38,6 @@
 #define ALIGN_SIZE(size, align) \
     (((uintptr_t)(size) + ((uintptr_t)(align) - 1)) & ~((uintptr_t)(align) - 1))
 
-#define INLINE_HOOK_MAKE_INTERFACE(fn_inject, fn_uninject) \
-    int uhook_inject(uhook_token_t* token, void* target, void* detour) {\
-        int ret;\
-        if ((ret = fn_inject(token, target, detour)) != UHOOK_SUCCESS) {\
-            token->fn_call = NULL;\
-            token->token = NULL;\
-        }\
-        return ret;\
-    }\
-    void uhook_uninject(uhook_token_t* token) {\
-        fn_uninject(token);\
-        token->fn_call = NULL;\
-        token->token = NULL;\
-    }
-
 static size_t _get_page_size(void)
 {
 #if defined(_WIN32)
@@ -65,79 +51,6 @@ static size_t _get_page_size(void)
 #endif
 
     return page_size <= 0 ? 4096 : page_size;
-}
-
-static int _unix_dl_iterate_phdr_callback(struct dl_phdr_info* info, size_t size, void* data)
-{
-    (void)size;
-
-    uintptr_t* p_ret = data;
-    *p_ret = info->dlpi_addr;
-
-    return 1;
-}
-
-static uintptr_t _unix_get_relocation(void)
-{
-    uintptr_t ret = 0;
-    dl_iterate_phdr(_unix_dl_iterate_phdr_callback, &ret);
-    return ret;
-}
-
-/**
- * @return ((size_t)-1) is failure, otherwise success.
- */
-static size_t _get_function_size(const void* addr)
-{
-    size_t ret = (size_t)-1;
-    elf_symbol_t* symbol_list = NULL;
-    FILE* f_exe = fopen("/proc/self/exe", "rb");
-    uintptr_t relocation = _unix_get_relocation();
-    uintptr_t target_addr = (uintptr_t)addr - relocation;
-
-    elf_info_t* info = NULL;
-    if (elf_parser_file(&info, f_exe)  != 0)
-    {
-        ret = (size_t)-1;
-        goto fin;
-    }
-
-    size_t idx;
-    for (idx = 0; idx < info->ehdr.e_shnum; idx++)
-    {
-        if (info->shdr[idx].sh_type == 0x02 || info->shdr[idx].sh_type == 0x0b)
-        {
-            int num = elf_parser_symbol(&symbol_list, info, idx);
-
-            int i;
-            for (i = 0; i < num; i++)
-            {
-                if (symbol_list[i].st_value == target_addr)
-                {
-                    ret = symbol_list[i].st_size;
-                    goto fin;
-                }
-            }
-
-            elf_release_symbol(symbol_list);
-            symbol_list = NULL;
-        }
-    }
-
-fin:
-    if (symbol_list != NULL)
-    {
-        elf_release_symbol(symbol_list);
-        symbol_list = NULL;
-    }
-    if (info != NULL)
-    {
-        elf_release_info(info);
-        info = NULL;
-    }
-    fclose(f_exe);
-
-    return ret;
 }
 
 /**
@@ -727,10 +640,10 @@ static size_t _x86_64_calc_trampoline_size(const void* func, size_t func_size)
     return func_size + jmp_far_size;
 }
 
-static int _x86_64_inline_hook_inject(uhook_token_t* token, void* target, void* detour)
+int uhook_inject(uhook_token_t* token, void* target, void* detour)
 {
     int ret;
-    size_t target_func_size = _get_function_size(target);
+    size_t target_func_size = elf_get_function_size(target);
     if (target_func_size == (size_t)-1)
     {
         return UHOOK_NOFUNCSIZE;
@@ -777,7 +690,7 @@ static int _x86_64_inline_hook_inject(uhook_token_t* token, void* target, void* 
         return UHOOK_UNKNOWN;
     }
 
-    if (_system_modify_opcode(target, sizeof(handle->redirect_opcode), _x86_64_do_inject, handle) < 0)
+    if (_system_modify_opcode(target, handle->redirect_size, _x86_64_do_inject, handle) < 0)
     {
         _free_execute_memory(handle);
         return -1;
@@ -785,23 +698,53 @@ static int _x86_64_inline_hook_inject(uhook_token_t* token, void* target, void* 
 
     token->fn_call = handle->trampoline;
     token->token = handle;
+    token->attrs = UHOOK_ATTR_INLINE;
     _flush_instruction_cache(target, handle->redirect_size);
 
     return UHOOK_SUCCESS;
 }
 
-static void _x86_64_inline_hook_uninject(uhook_token_t* token)
+int uhook_inject_got(uhook_token_t* token, const char* name, void* detour)
 {
-    x86_64_trampoline_t* handle = token->token;
-    if (_system_modify_opcode(handle->addr_target, sizeof(handle->redirect_opcode), _x86_64_undo_inject, handle) > 0)
+    void* inject_token = NULL;
+    void* inject_call = NULL;
+    int ret = elf_inject_got_patch(&inject_token, &inject_token, name, detour);
+
+    if (ret != UHOOK_SUCCESS)
     {
-        assert(!"modify opcode failed");
+        return ret;
     }
-    _flush_instruction_cache(handle->addr_target, handle->redirect_size);
-    _free_execute_memory(token->token);
+
+    token->fn_call = inject_call;
+    token->attrs = UHOOK_ATTR_GOTPLT;
+    token->token = inject_token;
+
+    return UHOOK_SUCCESS;
 }
 
-INLINE_HOOK_MAKE_INTERFACE(_x86_64_inline_hook_inject, _x86_64_inline_hook_uninject)
+void uhook_uninject(uhook_token_t* token)
+{
+    if (token->attrs & UHOOK_ATTR_GOTPLT)
+    {
+        elf_inject_got_unpatch(token->token);
+        goto fin;
+    }
+
+    if (token->attrs & UHOOK_ATTR_INLINE)
+    {
+        x86_64_trampoline_t* handle = token->token;
+        if (_system_modify_opcode(handle->addr_target, handle->redirect_size, _x86_64_undo_inject, handle) > 0)
+        {
+            assert(!"modify opcode failed");
+        }
+        _flush_instruction_cache(handle->addr_target, handle->redirect_size);
+        _free_execute_memory(token->token);
+        goto fin;
+    }
+
+fin:
+    memset(token, 0, sizeof(*token));
+}
 
 #elif defined(__arm__)
 
@@ -1006,7 +949,7 @@ static void _arm_undo_inject(void* arg)
     memcpy(handle->addr_target, handle->backup_opcode, copy_size);
 }
 
-static int _arm64_inline_hook_inject(void** origin, void* target, void* detour)
+int uhook_inject(void** origin, void* target, void* detour)
 {
     arm_trampoline_t* handle = _alloc_execute_memory(sizeof(arm_trampoline_t));
     if (handle == NULL)
@@ -1027,7 +970,7 @@ static int _arm64_inline_hook_inject(void** origin, void* target, void* detour)
     return 0;
 }
 
-static void _arm64_inline_hook_uninject(void* origin)
+void uhook_uninject(void* origin)
 {
     arm_trampoline_t* handle = container_of(origin, arm_trampoline_t, wrap_opcode);
     if (_system_modify_opcode(handle->addr_target, handle->redirect_opcode[2] != 0 ? 3 : 1, _arm_undo_inject, handle) > 0)

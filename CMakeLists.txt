@@ -5,9 +5,10 @@ list(APPEND CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/cmake")
 
 add_library(${PROJECT_NAME}
     "src/elfparser.c"
-    "src/uhook.c"
     "src/log.c"
-    "src/once.c")
+    "src/once.c"
+    "src/os_elf.c"
+    "src/uhook.c")
 
 target_include_directories(${PROJECT_NAME}
     PUBLIC
