@@ -15,6 +15,7 @@ typedef struct inject_got_ctx
     void*           detour;
     void*           origin;
     size_t          symidx;
+    int             inject_ret;
 
     struct
     {
@@ -164,7 +165,10 @@ static int _elf_gnu_hash_lookup_def(inject_got_ctx_t* self, const char* symbol, 
 
     //ignore STN_UNDEF
     uint32_t i = self->phdr_info.bucket[hash % self->phdr_info.bucket_cnt];
-    if (i < self->phdr_info.symoffset) return -1;
+    if (i < self->phdr_info.symoffset)
+    {
+        return -1;
+    }
 
     //loop through the chain
     while (1)
@@ -179,8 +183,11 @@ static int _elf_gnu_hash_lookup_def(inject_got_ctx_t* self, const char* symbol, 
             return 0;
         }
 
-        //chain ends with an element with the lowest bit set to 1
-        if (symhash & (uint32_t)1) break;
+        /* chain ends with an element with the lowest bit set to 1 */
+        if (symhash & (uint32_t)1)
+        {
+            break;
+        }
 
         i++;
     }
@@ -284,11 +291,12 @@ static int _unix_dl_iterate_phdr_got(struct dl_phdr_info* info, size_t size, voi
 
     if (_unix_find_symidx_by_name(helper, helper->name, &helper->symidx) < 0)
     {/* Not found, find next shared phdr */
+        LOG("symbol(%s) not found in %s", helper->name, info->dlpi_name);
         return 0;
     }
 
     // TODO
-    return 0;
+    return 1;
 }
 
 static int _elf_dl_iterate_phdr_callback(struct dl_phdr_info* info, size_t size, void* data)
@@ -311,8 +319,9 @@ int elf_inject_got_patch(void** token, void** fn_call, const char* name, void* d
 
     if (helper->origin == NULL)
     {
+        int ret = helper->inject_ret;
         free(helper);
-        return UHOOK_GOTNOTFOUND;
+        return ret;
     }
 
     *token = helper;
