@@ -1,6 +1,12 @@
 #include "springboard.hpp"
 
-int springboard_add_c(int a, int b)
+size_t springboard_strlen_c(const char* str)
 {
-    return a + b;
+    size_t cnt = 0;
+    while (*str)
+    {
+        cnt++;
+        str++;
+    }
+    return cnt;
 }
