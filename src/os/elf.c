@@ -291,14 +291,14 @@ static int _unix_dl_iterate_phdr_got(struct dl_phdr_info* info, size_t size, voi
     {
         return 0;
     }
-    LOG("phdr_dyn location: %p@%s", helper->phdr_info.dyn_phdr, info->dlpi_name);
+    LOG("phdr_dyn location: %p in `%s`", helper->phdr_info.dyn_phdr, info->dlpi_name);
 
     /* Parser PT_DYNAMIC program header */
     _unix_parser_dyn_phdr(helper, helper->phdr_info.dyn_phdr, helper->phdr_info.dyn_phdr_size);
 
     if (_unix_find_symidx_by_name(helper, helper->name, &helper->symidx) < 0)
     {/* Not found, find next shared phdr */
-        LOG("symbol(%s) not found in %s", helper->name, info->dlpi_name);
+        LOG("symbol(%s) not found in `%s`", helper->name, info->dlpi_name);
         return 0;
     }
 
@@ -411,8 +411,9 @@ int elf_inject_got_patch(void** token, void** fn_call, const char* name, void* d
     inject_got_ctx_t* helper = calloc(1, sizeof(inject_got_ctx_t));
     helper->name = name;
     helper->detour = detour;
+    helper->inject_ret = UHOOK_UNKNOWN;
 
-    dl_iterate_phdr(_unix_dl_iterate_phdr_got, &helper);
+    dl_iterate_phdr(_unix_dl_iterate_phdr_got, helper);
 
     if (helper->origin == NULL)
     {
