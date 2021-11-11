@@ -1,6 +1,6 @@
-#include "cunittest.h"
+#include "cutest.h"
 
 int main(int argc, char* argv[])
 {
-    return cunittest_run_tests(argc, argv, NULL);
+    return cutest_run_tests(argc, argv, NULL);
 }

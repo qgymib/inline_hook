@@ -4,7 +4,7 @@
 extern "C" {
 #endif
 
-#include "cunittest.h"
+#include "cutest.h"
 #include "uhook.h"
 #include <stdio.h>
 

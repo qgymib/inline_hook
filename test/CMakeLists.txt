@@ -6,5 +6,5 @@ add_executable(unittest
     "inline_loop.cpp"
     "inline_shared.cpp"
     "inline_simple.cpp")
-target_link_libraries(unittest PRIVATE cunittest uhook springboard)
+target_link_libraries(unittest PRIVATE cutest uhook springboard)
 add_test(UnitTest unittest)

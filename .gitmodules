@@ -1,6 +1,6 @@
 [submodule "third_party/zydis"]
 	path = third_party/zydis
 	url = ../../zyantific/zydis.git
-[submodule "third_party/cunittest"]
-	path = third_party/cunittest
-	url = https://github.com/qgymib/cunittest.git
+[submodule "third_party/cutest"]
+	path = third_party/cutest
+	url = https://github.com/qgymib/cutest.git
