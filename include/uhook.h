@@ -4,6 +4,16 @@
 extern "C" {
 #endif
 
+#if defined(_MSC_VER)
+#   if defined(uhook_EXPORTS) || defined(UHOOK_EXPORTS)
+#       define UHOOK_API __declspec(dllexport)
+#   else
+#       define UHOOK_API __declspec(dllimport)
+#   endif
+#else
+#   define UHOOK_API
+#endif
+
 enum uhook_errno
 {
     UHOOK_SUCCESS       = 0,    /**< Success */
@@ -29,7 +39,7 @@ typedef struct uhook_token
  * @param[in] detour        The function to replace original function
  * @return                  Inject result
  */
-int uhook_inject(uhook_token_t* token, void* target, void* detour);
+UHOOK_API int uhook_inject(uhook_token_t* token, void* target, void* detour);
 
 /**
  * @brief Inject GOT/PLT
@@ -38,13 +48,13 @@ int uhook_inject(uhook_token_t* token, void* target, void* detour);
  * @param[in] detour        The function to replace original function
  * @return                  Inject result
  */
-int uhook_inject_got(uhook_token_t* token, const char* name, void* detour);
+UHOOK_API int uhook_inject_got(uhook_token_t* token, const char* name, void* detour);
 
 /**
  * @brief Uninject function
  * @param[in,out] origin    The context to be uninject. This value will be set to NULL.
  */
-void uhook_uninject(uhook_token_t* token);
+UHOOK_API void uhook_uninject(uhook_token_t* token);
 
 #ifdef __cplusplus
 }
