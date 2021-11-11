@@ -13,7 +13,7 @@ static int del(int a, int b)
 }
 
 DISABLE_OPTIMIZE
-TEST(simple)
+TEST(inline_hook, simple)
 {
     ASSERT_EQ_D32(add(1, 2), 3);
 

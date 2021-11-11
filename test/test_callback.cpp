@@ -19,7 +19,7 @@ static int del(int a, int b, fn_callback cb)
 }
 
 DISABLE_OPTIMIZE
-TEST(callback)
+TEST(inline_hook, callback)
 {
     ASSERT_EQ_D32(add(1, 2, _callback_square), 9);
 
