@@ -9,6 +9,13 @@
 #define INLINE_HOOK_DEBUG
 #include "log.h"
 
+typedef struct relocation_helper
+{
+    int             ret;
+    void*           loc_addr;
+    void*           symbol_addr;
+}relocation_helper_t;
+
 typedef struct inject_got_ctx
 {
     const char*     name;
@@ -303,10 +310,100 @@ static int _elf_dl_iterate_phdr_callback(struct dl_phdr_info* info, size_t size,
 {
     (void)size;
 
-    uintptr_t* p_ret = data;
-    *p_ret = info->dlpi_addr;
+    relocation_helper_t* helper = data;
+    helper->loc_addr = (void*)info->dlpi_addr;
 
-    return 1;
+    size_t i;
+    for (i = 0; i < info->dlpi_phnum; i++)
+    {
+        uintptr_t start_addr = info->dlpi_addr + info->dlpi_phdr[i].p_vaddr;
+        uintptr_t end_addr = start_addr + info->dlpi_phdr[i].p_memsz;
+
+        if(start_addr <= (uintptr_t)helper->symbol_addr
+            && (uintptr_t)helper->symbol_addr <= end_addr)
+        {
+            helper->ret = 0;
+            return 1;
+        }
+    }
+
+    return 0;
+}
+
+static const char* _elf_get_phdy_name(ElfW(Word) type)
+{
+    switch (type)
+    {
+    case PT_NULL:           return "NULL";
+    case PT_LOAD:           return "LOAD";
+    case PT_DYNAMIC:        return "DYNAMIC";
+    case PT_INTERP:         return "INTERP";
+    case PT_NOTE:           return "NOTE";
+    case PT_SHLIB:          return "SHLIB";
+    case PT_PHDR:           return "PHDR";
+    case PT_TLS:            return "TLS";
+    case PT_NUM:            return "NUM";
+    case PT_LOOS:           return "LOOS";
+    case PT_GNU_EH_FRAME:   return "GNU_EH_FRAME";
+    case PT_GNU_STACK:      return "GNU_STACK";
+    case PT_GNU_RELRO:      return "GNU_RELRO";
+    case PT_SUNWBSS:        return "SUNWBSS";
+    case PT_SUNWSTACK:      return "SUNWSTACK";
+    case PT_HISUNW:         return "HISUNW";
+    case PT_LOPROC:         return "LOPROC";
+    case PT_HIPROC:         return "HIPROC";
+    default:                return "UNKNOWN";
+    }
+}
+
+static const char* _elf_get_p_flags(uint32_t flags)
+{
+    switch (flags)
+    {
+    case PF_X:                  return "--X";
+    case PF_W:                  return "-W-";
+    case PF_R:                  return "R--";
+    case PF_X | PF_W:           return "-WX";
+    case PF_X | PF_R:           return "R-X";
+    case PF_W | PF_R:           return "RW-";
+    case PF_X | PF_W | PF_R:    return "RWX";
+    default:                    return "   ";
+    }
+}
+
+static int _elf_dump_phdr_callback(struct dl_phdr_info* info, size_t size, void* data)
+{
+    (void)size; (void)data;
+
+    const char* str_split = sizeof(void*) == 8 ?
+        "--------------------------------------------------" : "----------------------------------";
+    int ptr_size = sizeof(void*) == 8 ? 16 : 8;
+
+    printf("%s\n", str_split);
+    printf("name: %s\n"
+        "relocate: 0x%" PRIxPTR "\n",
+        info->dlpi_name,
+        info->dlpi_addr);
+    printf("%-*s %-*s %-*s %-*s %-*s\n",
+        12, "[TYPE]",
+        ptr_size + 2, "[VADDR]",
+        ptr_size + 2, "[PADDR]",
+        ptr_size + 2, "[MEMSZ]",
+        ptr_size + 2, "[FLAGS]");
+
+    size_t i;
+    for (i = 0; i < info->dlpi_phnum; i++)
+    {
+        printf("%-*s 0x%0*" PRIxPTR " 0x%0*" PRIxPTR " 0x%0*zx %s\n",
+            12, _elf_get_phdy_name(info->dlpi_phdr[i].p_type),
+            ptr_size, (uintptr_t)info->dlpi_phdr[i].p_vaddr,
+            ptr_size, (uintptr_t)info->dlpi_phdr[i].p_paddr,
+            ptr_size, (size_t)info->dlpi_phdr[i].p_memsz,
+            _elf_get_p_flags(info->dlpi_phdr[i].p_flags));
+    }
+    printf("%s\n", str_split);
+
+    return 0;
 }
 
 int elf_inject_got_patch(void** token, void** fn_call, const char* name, void* detour)
@@ -339,27 +436,81 @@ void elf_inject_got_unpatch(void* token)
     free(helper);
 }
 
-void* elf_get_relocation(void)
+void* elf_get_relocation_by_addr(void* symbol)
 {
-    uintptr_t ret = 0;
-    dl_iterate_phdr(_elf_dl_iterate_phdr_callback, &ret);
-    return (void*)ret;
+    relocation_helper_t helper;
+    helper.ret = -1;
+    helper.loc_addr = 0;
+    helper.symbol_addr = symbol;
+
+    dl_iterate_phdr(_elf_dl_iterate_phdr_callback, &helper);
+
+    if (helper.ret < 0)
+    {
+        return NULL;
+    }
+
+    return (void*)helper.loc_addr;
 }
 
 /**
- * @return ((size_t)-1) is failure, otherwise success.
+ * @return a string need to free
  */
-size_t elf_get_function_size(const void* addr)
+static int _elf_find_path(uintptr_t addr, char* buffer, size_t size)
+{
+    int ret = -1;
+    char perm[5];
+    uintptr_t base_addr, end_addr;
+    unsigned long offset;
+    FILE* f_maps = fopen("/proc/self/maps", "r");
+    if (f_maps == NULL)
+    {
+        return -1;
+    }
+
+    char scn_buf[64];
+    snprintf(scn_buf, sizeof(scn_buf), "%%" SCNxPTR "-%%" SCNxPTR " %%4s %%lx %%*x:%%*x %%*d %%%zus", size - 1);
+
+    char line[1024];
+    while (fgets(line, sizeof(line), f_maps))
+    {
+        if (sscanf(line, scn_buf, &base_addr, &end_addr, perm, &offset, buffer) != 5)
+        {
+            continue;
+        }
+
+        if (base_addr <= addr && addr <= end_addr)
+        {
+            ret = 0;
+            goto fin;
+        }
+    }
+
+fin:
+    fclose(f_maps);
+    return ret;
+}
+
+static size_t _elf_get_function_size_from_object(const char* path, void* symbol)
 {
     size_t ret = (size_t)-1;
     elf_symbol_t* symbol_list = NULL;
-    FILE* f_exe = fopen("/proc/self/exe", "rb");
-    uintptr_t relocation = (uintptr_t)elf_get_relocation();
-    uintptr_t target_addr = (uintptr_t)addr - relocation;
+    FILE* f_exe = fopen(path, "rb");
+
+    uintptr_t relocation = (uintptr_t)elf_get_relocation_by_addr(symbol);
+    if (relocation == 0)
+    {
+        LOG("get relocation for symbol(%p) failed", symbol);
+        ret = (size_t)-1;
+        goto fin;
+    }
+
+    uintptr_t target_addr = (uintptr_t)symbol - relocation;
 
     elf_info_t* info = NULL;
     if (elf_parser_file(&info, f_exe) != 0)
     {
+        LOG("parser file(%s) failed", path);
         ret = (size_t)-1;
         goto fin;
     }
@@ -400,4 +551,24 @@ fin:
     fclose(f_exe);
 
     return ret;
+}
+
+/**
+ * @return ((size_t)-1) is failure, otherwise success.
+ */
+size_t elf_get_function_size(void* symbol)
+{
+    char path_buffer[256];
+    if (_elf_find_path((uintptr_t)symbol, path_buffer, sizeof(path_buffer)) < 0)
+    {
+        LOG("cannot find path for symbol(%p)", symbol);
+        return (size_t)-1;
+    }
+
+    return _elf_get_function_size_from_object(path_buffer, symbol);
+}
+
+void uhook_dump_phdr(void)
+{
+    dl_iterate_phdr(_elf_dump_phdr_callback, NULL);
 }

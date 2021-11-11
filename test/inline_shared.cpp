@@ -1,4 +1,4 @@
-#include "common.h"
+#include "common.hpp"
 #include "springboard.hpp"
 
 typedef int (*hook_fn)(int, int);

@@ -1,4 +1,4 @@
-#include "common.h"
+#include "common.hpp"
 
 typedef int (*fn_callback)(int);
 typedef int(*fn_sig)(int, int, fn_callback);
