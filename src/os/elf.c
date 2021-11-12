@@ -115,7 +115,35 @@ static ElfW(Dyn)* _unix_get_dyn_phdr(struct dl_phdr_info* info, size_t* size)
     return NULL;
 }
 
-static int _unix_parser_dyn_phdr(inject_got_ctx_t* dst, ElfW(Dyn)* dyn_phdr, size_t dyn_phdr_size)
+/**
+ * Some shared library like `linux-vdso.so.1` does not map it's GNU_HASH in user-space.
+ * So it is better to check address before access.
+ * @return bool
+ */
+static int _elf_is_in_load_range(struct dl_phdr_info* info, void* addr, void* relocation)
+{
+    if ((uintptr_t)addr < (uintptr_t)relocation)
+    {
+        return 0;
+    }
+
+    uintptr_t addr_diff = (uintptr_t)addr - (uintptr_t)relocation;
+
+    size_t i;
+    for (i = 0; i < info->dlpi_phnum; i++)
+    {
+        if (info->dlpi_phdr[i].p_type == PT_LOAD
+            && info->dlpi_phdr[i].p_vaddr <= addr_diff
+            && addr_diff <= info->dlpi_phdr[i].p_memsz + info->dlpi_phdr[i].p_vaddr)
+        {
+            return 1;
+        }
+    }
+
+    return 0;
+}
+
+static int _unix_parser_dyn_phdr(inject_got_ctx_t* dst, ElfW(Dyn)* dyn_phdr, size_t dyn_phdr_size, struct dl_phdr_info* info)
 {
     size_t cnt = dyn_phdr_size / sizeof(ElfW(Dyn));
     size_t i;
@@ -160,6 +188,15 @@ static int _unix_parser_dyn_phdr(inject_got_ctx_t* dst, ElfW(Dyn)* dyn_phdr, siz
 
         case DT_GNU_HASH:
         {
+            /**
+             * Some shared library like `linux-vdso.so.1` does not map it's GNU_HASH in userspace,
+             * we cannot access it.
+             */
+            if (!_elf_is_in_load_range(info, (void*)dyn_phdr[i].d_un.d_ptr, (void*)dst->relocation))
+            {
+                return -1;
+            }
+
             uint32_t* raw = (uint32_t*)dyn_phdr[i].d_un.d_ptr;
             dst->phdr_info.bucket_cnt = raw[0];
             dst->phdr_info.symoffset = raw[1];
@@ -603,7 +640,10 @@ static int _unix_dl_iterate_phdr_got(struct dl_phdr_info* info, size_t size, voi
     //LOG("phdr_dyn location: %p in `%s`", helper->phdr_info.dyn_phdr, info->dlpi_name);
 
     /* Parser PT_DYNAMIC program header */
-    _unix_parser_dyn_phdr(helper, helper->phdr_info.dyn_phdr, helper->phdr_info.dyn_phdr_size);
+    if (_unix_parser_dyn_phdr(helper, helper->phdr_info.dyn_phdr, helper->phdr_info.dyn_phdr_size, info) < 0)
+    {
+        return 0;
+    }
 
     if (_unix_find_symidx_by_name(helper, helper->name, &helper->symidx) < 0)
     {/* Not found, find next shared phdr */
