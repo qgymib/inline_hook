@@ -586,7 +586,8 @@ static int _elf_find_and_replace_func(inject_got_ctx_t* self,
 static int _elf_inject_plt_got(inject_got_ctx_t* helper)
 {
     uintptr_t rel_common;
-    int found;
+    int found_relplt = 0;
+    int found_reldyn = 0;
     int r;
 
     size_t step_width = helper->phdr_info.is_rela ? sizeof(ElfW(Rela)) : sizeof(ElfW(Rel));
@@ -598,11 +599,14 @@ static int _elf_inject_plt_got(inject_got_ctx_t* helper)
         {
             if (0 != (r = _elf_find_and_replace_func(helper, 1,
                 helper->detour, &helper->origin,
-                helper->symidx, (void*)rel_common, &found)))
+                helper->symidx, (void*)rel_common, &found_relplt)))
             {
                 return r;
             }
-            if (found) break;
+            if (found_relplt)
+            {
+                break;
+            }
         }
     }
 
@@ -613,14 +617,19 @@ static int _elf_inject_plt_got(inject_got_ctx_t* helper)
         {
             if (0 != (r = _elf_find_and_replace_func(helper, 0,
                 helper->detour, &helper->origin,
-                helper->symidx, (void*)rel_common, NULL)))
+                helper->symidx, (void*)rel_common, &found_reldyn)))
             {
                 return r;
+            }
+
+            if (found_reldyn)
+            {
+                break;
             }
         }
     }
 
-    return 0;
+    return (found_reldyn || found_relplt) ? 0 : UHOOK_GOTNOTFOUND;
 }
 
 static int _unix_dl_iterate_phdr_got(struct dl_phdr_info* info, size_t size, void* data)
@@ -647,7 +656,7 @@ static int _unix_dl_iterate_phdr_got(struct dl_phdr_info* info, size_t size, voi
 
     if (_unix_find_symidx_by_name(helper, helper->name, &helper->symidx) < 0)
     {/* Not found, find next shared phdr */
-        LOG("symbol(%s) not found in `%s`", helper->name, info->dlpi_name);
+        //LOG("symbol(%s) not found in `%s`", helper->name, info->dlpi_name);
         return 0;
     }
 
