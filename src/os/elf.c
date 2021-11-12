@@ -721,6 +721,15 @@ static const char* _elf_get_dynamic_section_name(uint64_t d_tag)
     case DT_LOPROC:             return "LOPROC";
     case DT_HIPROC:             return "HIPROC";
     case DT_PROCNUM:            return "PROCNUM";
+    case DT_GNU_HASH:           return "GNU_HASH";
+    case DT_VERSYM:             return "VERSYM";
+    case DT_RELACOUNT:          return "RELACOUNT";
+    case DT_RELCOUNT:           return "RELCOUNT";
+    case DT_FLAGS_1:            return "FLAGS_1";
+    case DT_VERDEF:             return "VERDEF";
+    case DT_VERDEFNUM:          return "VERDEFNUM";
+    case DT_VERNEED:            return "VERNEED";
+    case DT_VERNEEDNUM:         return "VERNEEDNUM";
     default:                    return "UNKNOWN";
     }
 }
@@ -732,13 +741,11 @@ static void _eld_dump_dynamic_phdr(ElfW(Dyn)* phdr, size_t size)
     size_t cnt = size / sizeof(ElfW(Dyn));
     size_t i;
 
-    printf("%-*s [VALUE]\n",
-        15, "[TAG]");
-
     for (i = 0; i < cnt; i++)
     {
-        printf("%-*s 0x%0*" PRIxPTR "\n",
+        printf("%-*s 0x%016" PRIx64 " 0x%0*" PRIxPTR "\n",
             15, _elf_get_dynamic_section_name(phdr[i].d_tag),
+            phdr[i].d_tag,
             ptr_width, phdr[i].d_un.d_ptr);
     }
 }
@@ -758,7 +765,7 @@ static int _elf_dump_phdr_callback(struct dl_phdr_info* info, size_t size, void*
         info->dlpi_addr);
 
     printf("%-*s %-*s %-*s %-*s %-*s\n",
-        12, "[TYPE]",
+        12, "[PHDR:TYPE]",
         ptr_size + 2, "[VADDR]",
         ptr_size + 2, "[PADDR]",
         ptr_size + 2, "[MEMSZ]",
@@ -782,7 +789,7 @@ static int _elf_dump_phdr_callback(struct dl_phdr_info* info, size_t size, void*
         return 0;
     }
 
-    printf("dynamic phdr:\n");
+	printf("%-*s %-*s [VALUE]\n", 15, "[DYN:TAG]", 18, "[TAG:HEX]");
     _eld_dump_dynamic_phdr(dyn_phdr, dy_size);
 
     printf("%s\n", str_split);
