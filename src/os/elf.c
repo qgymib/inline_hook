@@ -302,7 +302,7 @@ static int _unix_dl_iterate_phdr_got(struct dl_phdr_info* info, size_t size, voi
         return 0;
     }
 
-    // TODO
+    // TODO inject GOT/PLT
     return 1;
 }
 
@@ -406,54 +406,6 @@ static int _elf_dump_phdr_callback(struct dl_phdr_info* info, size_t size, void*
     return 0;
 }
 
-int elf_inject_got_patch(void** token, void** fn_call, const char* name, void* detour)
-{
-    inject_got_ctx_t* helper = calloc(1, sizeof(inject_got_ctx_t));
-    helper->name = name;
-    helper->detour = detour;
-    helper->inject_ret = UHOOK_UNKNOWN;
-
-    dl_iterate_phdr(_unix_dl_iterate_phdr_got, helper);
-
-    if (helper->origin == NULL)
-    {
-        int ret = helper->inject_ret;
-        free(helper);
-        return ret;
-    }
-
-    *token = helper;
-    *fn_call = helper->origin;
-
-    return UHOOK_SUCCESS;
-}
-
-void elf_inject_got_unpatch(void* token)
-{
-    inject_got_ctx_t* helper = token;
-
-    // TODO restore GOT
-
-    free(helper);
-}
-
-void* elf_get_relocation_by_addr(void* symbol)
-{
-    relocation_helper_t helper;
-    helper.ret = -1;
-    helper.loc_addr = 0;
-    helper.symbol_addr = symbol;
-
-    dl_iterate_phdr(_elf_dl_iterate_phdr_callback, &helper);
-
-    if (helper.ret < 0)
-    {
-        return NULL;
-    }
-
-    return (void*)helper.loc_addr;
-}
-
 /**
  * @return a string need to free
  */
@@ -552,6 +504,54 @@ fin:
     fclose(f_exe);
 
     return ret;
+}
+
+int elf_inject_got_patch(void** token, void** fn_call, const char* name, void* detour)
+{
+    inject_got_ctx_t* helper = calloc(1, sizeof(inject_got_ctx_t));
+    helper->name = name;
+    helper->detour = detour;
+    helper->inject_ret = UHOOK_UNKNOWN;
+
+    dl_iterate_phdr(_unix_dl_iterate_phdr_got, helper);
+
+    if (helper->origin == NULL)
+    {
+        int ret = helper->inject_ret;
+        free(helper);
+        return ret;
+    }
+
+    *token = helper;
+    *fn_call = helper->origin;
+
+    return UHOOK_SUCCESS;
+}
+
+void elf_inject_got_unpatch(void* token)
+{
+    inject_got_ctx_t* helper = token;
+
+    // TODO restore GOT
+
+    free(helper);
+}
+
+void* elf_get_relocation_by_addr(void* symbol)
+{
+    relocation_helper_t helper;
+    helper.ret = -1;
+    helper.loc_addr = 0;
+    helper.symbol_addr = symbol;
+
+    dl_iterate_phdr(_elf_dl_iterate_phdr_callback, &helper);
+
+    if (helper.ret < 0)
+    {
+        return NULL;
+    }
+
+    return (void*)helper.loc_addr;
 }
 
 /**
