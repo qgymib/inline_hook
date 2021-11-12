@@ -49,7 +49,7 @@ int uhook_inject_got(uhook_token_t* token, const char* name, void* detour)
 {
     void* inject_token = NULL;
     void* inject_call = NULL;
-    int ret = elf_inject_got_patch(&inject_token, &inject_token, name, detour);
+    int ret = elf_inject_got_patch(&inject_token, &inject_call, name, detour);
 
     if (ret != UHOOK_SUCCESS)
     {

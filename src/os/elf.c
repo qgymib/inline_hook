@@ -2,12 +2,47 @@
 #include <link.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/mman.h>
 #include "uhook.h"
+#include "os/os.h"
 #include "os/elfparser.h"
 #include "os/elf.h"
 
 #define INLINE_HOOK_DEBUG
 #include "log.h"
+
+#if defined(__arm__) || defined(_M_ARM)
+#   define XH_ELF_R_GENERIC_JUMP_SLOT R_ARM_JUMP_SLOT      //.rel.plt
+#   define XH_ELF_R_GENERIC_GLOB_DAT  R_ARM_GLOB_DAT       //.rel.dyn
+#   define XH_ELF_R_GENERIC_ABS       R_ARM_ABS32          //.rel.dyn
+#elif defined(__aarch64__) || defined(_M_ARM64)
+#   define XH_ELF_R_GENERIC_JUMP_SLOT R_AARCH64_JUMP_SLOT
+#   define XH_ELF_R_GENERIC_GLOB_DAT  R_AARCH64_GLOB_DAT
+#   define XH_ELF_R_GENERIC_ABS       R_AARCH64_ABS64
+#elif defined(__i386__) || defined(_M_IX86)
+#   define XH_ELF_R_GENERIC_JUMP_SLOT R_386_JMP_SLOT
+#   define XH_ELF_R_GENERIC_GLOB_DAT  R_386_GLOB_DAT
+#   define XH_ELF_R_GENERIC_ABS       R_386_32
+#elif defined(__x86_64__) || defined(__amd64__) || defined(_M_AMD64)
+#   define XH_ELF_R_GENERIC_JUMP_SLOT R_X86_64_JUMP_SLOT
+#   define XH_ELF_R_GENERIC_GLOB_DAT  R_X86_64_GLOB_DAT
+#   define XH_ELF_R_GENERIC_ABS       R_X86_64_64
+#else
+#   error unknown arch
+#endif
+
+#if defined(__LP64__)
+#   define XH_ELF_R_SYM(info)  ELF64_R_SYM(info)
+#   define XH_ELF_R_TYPE(info) ELF64_R_TYPE(info)
+#else
+#   define XH_ELF_R_SYM(info)  ELF32_R_SYM(info)
+#   define XH_ELF_R_TYPE(info) ELF32_R_TYPE(info)
+#endif
+
+#define FOREACH_BLOCK(token, addr, size, width) \
+    for (token = (uintptr_t)addr;\
+        token < (uintptr_t)addr + (size_t)size;\
+        token = (uintptr_t)token + (size_t)width)
 
 typedef struct relocation_helper
 {
@@ -16,39 +51,53 @@ typedef struct relocation_helper
     void*           symbol_addr;
 }relocation_helper_t;
 
+typedef struct dynamic_phdr
+{
+    ElfW(Dyn)*      dyn_phdr;       /**< Dynamic section address */
+    size_t          dyn_phdr_size;  /**< Dynamic section size in bytes */
+
+    const char*     strtab;         /**< .dynstr (string-table) */
+    ElfW(Sym)*      symtab;         /**< .dynsym (symbol-index to string-table's offset) */
+    int             is_rela;        /**< Rela / Rel */
+
+    ElfW(Addr)      relplt;         /**< .rel.plt or .rela.plt */
+    ElfW(Word)      relplt_sz;
+    ElfW(Addr)      reldyn;         /**< .rel.dyn or .rela.dyn */
+    ElfW(Word)      reldyn_sz;
+
+    /* ELF Hash */
+    uint32_t*       bucket;
+    uint32_t        bucket_cnt;
+    uint32_t*       chain;
+    uint32_t        chain_cnt;      /**< invalid for GNU hash */
+
+    /* GNU Hash */
+    ElfW(Addr)*     bloom;          /**< Check this value for GNU Hash usage */
+    size_t          symoffset;
+    size_t          bloom_sz;
+    size_t          bloom_shift;
+}dynamic_phdr_t;
+
 typedef struct inject_got_ctx
 {
-    const char*     name;
-    void*           detour;
-    void*           origin;
-    size_t          symidx;
-    int             inject_ret;
+    const char*     name;           /**< Symbol name */
+    void*           detour;         /**< Detour function address */
+    void*           origin;         /**< Original function address */
+    int             inject_ret;     /**< Inject result */
+
+    size_t          symidx;         /**< Symbol index for PLT/GOT */
+    char            elfpath[256];   /**< Symbol location */
+    uintptr_t       relocation;     /**< Load location */
+
+    size_t          page_size;      /**< Page size */
 
     struct
     {
-        ElfW(Dyn)*  dyn_phdr;
-        size_t      dyn_phdr_size;
+        ElfW(Addr)  addr_relplt;    /**< Address of inject position .rel(a).plt */
+        ElfW(Addr)  addr_reldyn;    /**< Address of inject position .rel(a).dyn */
+    }inject_info;
 
-        const char* strtab;         /**< .dynstr (string-table) */
-        ElfW(Sym)*  symtab;         /**< .dynsym (symbol-index to string-table's offset) */
-        int         is_rela;
-        ElfW(Addr)  relplt;         /**< .rel.plt or .rela.plt */
-        ElfW(Word)  relplt_sz;
-        ElfW(Addr)  reldyn;         /**< .rel.dyn or .rela.dyn */
-        ElfW(Word)  reldyn_sz;
-
-        /* ELF Hash */
-        uint32_t*   bucket;
-        uint32_t    bucket_cnt;
-        uint32_t*   chain;
-        uint32_t    chain_cnt;      /**< invalid for GNU hash */
-
-        /* GNU Hash */
-        ElfW(Addr)* bloom;          /**< Check this value for GNU Hash usage */
-        size_t      symoffset;
-        size_t      bloom_sz;
-        size_t      bloom_shift;
-    } phdr_info;
+    dynamic_phdr_t  phdr_info;      /**< Program header info */
 }inject_got_ctx_t;
 
 static ElfW(Dyn)* _unix_get_dyn_phdr(struct dl_phdr_info* info, size_t* size)
@@ -186,7 +235,7 @@ static int _elf_gnu_hash_lookup_def(inject_got_ctx_t* self, const char* symbol, 
         if ((hash | (uint32_t)1) == (symhash | (uint32_t)1) && 0 == strcmp(symbol, symname))
         {
             *symidx = i;
-            LOG("found %s at symidx: %zu (GNU_HASH DEF)", symbol, *symidx);
+            //LOG("found %s at symidx: %zu (GNU_HASH DEF)", symbol, *symidx);
             return 0;
         }
 
@@ -279,11 +328,267 @@ static int _unix_find_symidx_by_name(inject_got_ctx_t* info, const char* name, s
     return _unix_find_symidx_by_name_hash_lookup(info, name, symidx);
 }
 
+static int _util_get_mem_protect(uintptr_t addr, size_t len, const char* pathname, unsigned int* prot)
+{
+    uintptr_t  start_addr = addr;
+    uintptr_t  end_addr = addr + len;
+    FILE* fp;
+    char       line[512];
+    uintptr_t  start, end;
+    char       perm[5];
+    int        load0 = 1;
+    int        found_all = 0;
+
+    *prot = 0;
+
+    if (NULL == (fp = fopen("/proc/self/maps", "r"))) return -1;
+
+    while (fgets(line, sizeof(line), fp))
+    {
+        if (NULL != pathname)
+            if (NULL == strstr(line, pathname)) continue;
+
+        if (sscanf(line, "%"PRIxPTR"-%"PRIxPTR" %4s ", &start, &end, perm) != 3) continue;
+
+        if (perm[3] != 'p') continue;
+
+        if (start_addr >= start && start_addr < end)
+        {
+            if (load0)
+            {
+                //first load segment
+                if (perm[0] == 'r') *prot |= PROT_READ;
+                if (perm[1] == 'w') *prot |= PROT_WRITE;
+                if (perm[2] == 'x') *prot |= PROT_EXEC;
+                load0 = 0;
+            }
+            else
+            {
+                //others
+                if (perm[0] != 'r') *prot &= ~PROT_READ;
+                if (perm[1] != 'w') *prot &= ~PROT_WRITE;
+                if (perm[2] != 'x') *prot &= ~PROT_EXEC;
+            }
+
+            if (end_addr <= end)
+            {
+                found_all = 1;
+                break; //finished
+            }
+            else
+            {
+                start_addr = end; //try to find the next load segment
+            }
+        }
+    }
+
+    fclose(fp);
+
+    if (!found_all) return -1;
+
+    return 0;
+}
+
+static int _util_get_addr_protect(uintptr_t addr, const char* pathname, unsigned int* prot)
+{
+    return _util_get_mem_protect(addr, sizeof(addr), pathname, prot);
+}
+
+static int _util_set_addr_protect(uintptr_t addr, unsigned int prot, size_t page_size)
+{
+    if (0 != mprotect(_page_of((void*)addr, page_size), page_size, (int)prot))
+    {
+        return -1;
+    }
+
+    return 0;
+}
+
+static int _elf_replace_function(inject_got_ctx_t* self, ElfW(Addr) addr, void* new_func, void** old_func)
+{
+    void* old_addr;
+    unsigned int  old_prot = 0;
+    unsigned int  need_prot = PROT_READ | PROT_WRITE;
+    int           r;
+
+    //already replaced?
+    //here we assume that we always have read permission, is this a problem?
+    if (*(void**)addr == new_func) return 0;
+
+    //get old prot
+    if (0 != (r = _util_get_addr_protect(addr, self->elfpath, &old_prot)))
+    {
+        LOG("get addr prot failed. ret: %d", r);
+        return r;
+    }
+
+    if (old_prot != need_prot)
+    {
+        //set new prot
+        if (0 != (r = _util_set_addr_protect(addr, need_prot, self->page_size)))
+        {
+            LOG("set addr prot failed. ret: %d", r);
+            return r;
+        }
+    }
+
+    //save old func
+    old_addr = *(void**)addr;
+    if (NULL != old_func) *old_func = old_addr;
+
+    //replace func
+    *(void**)addr = new_func; //segmentation fault sometimes
+
+    if (old_prot != need_prot)
+    {
+        //restore the old prot
+        if (0 != (r = _util_set_addr_protect(addr, old_prot, self->page_size)))
+        {
+            LOG("restore addr prot failed. ret: %d", r);
+        }
+    }
+
+    //clear cache
+    _flush_instruction_cache(_page_of((void*)addr, self->page_size), self->page_size);
+
+    return 0;
+}
+
+/**
+ * @brief Check whether symidx inside this rel(a) region
+ * @param[in] rel_common    rel(a) region address
+ * @param[in] symidx        Symbol index
+ * @param[in] is_rela       region is typeof rela
+ * @param[in] is_plt        region is PLT
+ * @param[out] r_offset     Offset of symbol slot
+ * @return                  bool
+ */
+static int _elf_check_symbol(void* rel_common, uint32_t symidx, int is_rela, int is_plt, ElfW(Addr)* r_offset)
+{
+    size_t r_info;
+    if (is_rela)
+    {
+        ElfW(Rela)*  rela = (ElfW(Rela)*)rel_common;
+        r_info = rela->r_info;
+        *r_offset = rela->r_offset;
+    }
+    else
+    {
+        ElfW(Rel)*  rel = (ElfW(Rel)*)rel_common;
+        r_info = rel->r_info;
+        *r_offset = rel->r_offset;
+    }
+
+    //check sym
+    size_t r_sym = XH_ELF_R_SYM(r_info);
+    if (r_sym != symidx)
+    {
+        return 0;
+    }
+
+    //check type
+    size_t r_type = XH_ELF_R_TYPE(r_info);
+    if (is_plt && r_type != XH_ELF_R_GENERIC_JUMP_SLOT)
+    {
+        return 0;
+    }
+
+    if (!is_plt && (r_type != XH_ELF_R_GENERIC_GLOB_DAT && r_type != XH_ELF_R_GENERIC_ABS))
+    {
+        return 0;
+    }
+
+    return 1;
+}
+
+static int _elf_find_and_replace_func(inject_got_ctx_t* self,
+    int is_plt, void* new_func, void** old_func,
+    uint32_t symidx, void* rel_common, int* found)
+{
+    ElfW(Addr)      r_offset;
+    ElfW(Addr)      addr;
+    int             r;
+
+    if (NULL != found) *found = 0;
+
+    if (!_elf_check_symbol(rel_common, symidx, self->phdr_info.is_rela, is_plt, &r_offset))
+    {
+        return 0;
+    }
+
+    if (NULL != found) *found = 1;
+
+    /* do replace */
+    addr = self->relocation + r_offset;
+    if (addr < self->relocation)
+    {
+        return UHOOK_UNKNOWN;
+    }
+
+    if (is_plt)
+    {
+        self->inject_info.addr_relplt = addr;
+    }
+    else
+    {
+        self->inject_info.addr_reldyn = addr;
+    }
+
+    if (0 != (r = _elf_replace_function(self, addr, new_func, old_func)))
+    {
+        return r;
+    }
+
+    return 0;
+}
+
+static int _elf_inject_plt_got(inject_got_ctx_t* helper)
+{
+    uintptr_t rel_common;
+    int found;
+    int r;
+
+    size_t step_width = helper->phdr_info.is_rela ? sizeof(ElfW(Rela)) : sizeof(ElfW(Rel));
+
+    //replace for .rel(a).plt
+    if (0 != helper->phdr_info.relplt)
+    {
+        FOREACH_BLOCK(rel_common, helper->phdr_info.relplt, helper->phdr_info.relplt_sz, step_width)
+        {
+            if (0 != (r = _elf_find_and_replace_func(helper, 1,
+                helper->detour, &helper->origin,
+                helper->symidx, (void*)rel_common, &found)))
+            {
+                return r;
+            }
+            if (found) break;
+        }
+    }
+
+    //replace for .rel(a).dyn
+    if (0 != helper->phdr_info.reldyn)
+    {
+        FOREACH_BLOCK(rel_common, helper->phdr_info.reldyn, helper->phdr_info.reldyn_sz, step_width)
+        {
+            if (0 != (r = _elf_find_and_replace_func(helper, 0,
+                helper->detour, &helper->origin,
+                helper->symidx, (void*)rel_common, NULL)))
+            {
+                return r;
+            }
+        }
+    }
+
+    return 0;
+}
+
 static int _unix_dl_iterate_phdr_got(struct dl_phdr_info* info, size_t size, void* data)
 {
     (void)size;
 
     inject_got_ctx_t* helper = data;
+    helper->relocation = info->dlpi_addr;
+    snprintf(helper->elfpath, sizeof(helper->elfpath), "%s", info->dlpi_name);
 
     /* find PT_DYNAMIC phdr */
     helper->phdr_info.dyn_phdr = _unix_get_dyn_phdr(info, &helper->phdr_info.dyn_phdr_size);
@@ -291,7 +596,7 @@ static int _unix_dl_iterate_phdr_got(struct dl_phdr_info* info, size_t size, voi
     {
         return 0;
     }
-    LOG("phdr_dyn location: %p in `%s`", helper->phdr_info.dyn_phdr, info->dlpi_name);
+    //LOG("phdr_dyn location: %p in `%s`", helper->phdr_info.dyn_phdr, info->dlpi_name);
 
     /* Parser PT_DYNAMIC program header */
     _unix_parser_dyn_phdr(helper, helper->phdr_info.dyn_phdr, helper->phdr_info.dyn_phdr_size);
@@ -302,7 +607,8 @@ static int _unix_dl_iterate_phdr_got(struct dl_phdr_info* info, size_t size, voi
         return 0;
     }
 
-    // TODO inject GOT/PLT
+    /* inject GOT/PLT */
+    helper->inject_ret = _elf_inject_plt_got(helper);
     return 1;
 }
 
@@ -512,12 +818,13 @@ int elf_inject_got_patch(void** token, void** fn_call, const char* name, void* d
     helper->name = name;
     helper->detour = detour;
     helper->inject_ret = UHOOK_UNKNOWN;
+    helper->page_size = _get_page_size();
 
     dl_iterate_phdr(_unix_dl_iterate_phdr_got, helper);
 
-    if (helper->origin == NULL)
+    int ret = helper->inject_ret;
+    if (helper->origin == NULL || ret != UHOOK_SUCCESS)
     {
-        int ret = helper->inject_ret;
         free(helper);
         return ret;
     }
@@ -533,6 +840,15 @@ void elf_inject_got_unpatch(void* token)
     inject_got_ctx_t* helper = token;
 
     // TODO restore GOT
+
+    if (helper->inject_info.addr_relplt != 0)
+    {
+        _elf_replace_function(helper, helper->inject_info.addr_relplt, helper->origin, NULL);
+    }
+    if (helper->inject_info.addr_relplt != 0)
+    {
+        _elf_replace_function(helper, helper->inject_info.addr_relplt, helper->origin, NULL);
+    }
 
     free(helper);
 }
