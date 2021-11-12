@@ -21,6 +21,7 @@ TEST(pltgot, dependency)
     ASSERT_NE_PTR(s_token.fcall, NULL);
 
     ASSERT_EQ_SIZE(springboard_strlen_c(str), (size_t)-1);
+    ASSERT_EQ_SIZE(((springboard_strlen_fn)s_token.fcall)(str), str_len);
 
     uhook_uninject(&s_token);
     ASSERT_EQ_SIZE(springboard_strlen_c(str), str_len);

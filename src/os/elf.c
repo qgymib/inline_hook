@@ -677,6 +677,72 @@ static const char* _elf_get_p_flags(uint32_t flags)
     }
 }
 
+static const char* _elf_get_dynamic_section_name(uint64_t d_tag)
+{
+    switch (d_tag)
+    {
+    case DT_NULL:               return "NULL";
+    case DT_NEEDED:             return "NEEDED";
+    case DT_PLTRELSZ:           return "PLTRELSZ";
+    case DT_PLTGOT:             return "PLTGOT";
+    case DT_HASH:               return "HASH";
+    case DT_STRTAB:             return "STRTAB";
+    case DT_SYMTAB:             return "SYMTAB";
+    case DT_RELA:               return "RELA";
+    case DT_RELASZ:             return "RELASZ";
+    case DT_RELAENT:            return "RELAENT";
+    case DT_STRSZ:              return "STRSZ";
+    case DT_SYMENT:             return "SYMENT";
+    case DT_INIT:               return "INIT";
+    case DT_FINI:               return "FINI";
+    case DT_SONAME:             return "SONAME";
+    case DT_RPATH:              return "RPATH";
+    case DT_SYMBOLIC:           return "SYMBOLIC";
+    case DT_REL:                return "REL";
+    case DT_RELSZ:              return "RELSZ";
+    case DT_RELENT:             return "RELENT";
+    case DT_PLTREL:             return "PLTREL";
+    case DT_DEBUG:              return "DEBUG";
+    case DT_TEXTREL:            return "TEXTREL";
+    case DT_JMPREL:             return "JMPREL";
+    case DT_BIND_NOW:           return "BIND_NOW";
+    case DT_INIT_ARRAY:         return "INIT_ARRAY";
+    case DT_FINI_ARRAY:         return "FINI_ARRAY";
+    case DT_INIT_ARRAYSZ:       return "INIT_ARRAYSZ";
+    case DT_FINI_ARRAYSZ:       return "FINI_ARRAYSZ";
+    case DT_RUNPATH:            return "RUNPATH";
+    case DT_FLAGS:              return "FLAGS";
+    case DT_PREINIT_ARRAY:      return "PREINIT_ARRAY";
+    case DT_PREINIT_ARRAYSZ:    return "PREINIT_ARRAYSZ";
+    case DT_SYMTAB_SHNDX:       return "SYMTAB_SHNDX";
+    case DT_NUM:                return "NUM";
+    case DT_LOOS:               return "LOOS";
+    case DT_HIOS:               return "HIOS";
+    case DT_LOPROC:             return "LOPROC";
+    case DT_HIPROC:             return "HIPROC";
+    case DT_PROCNUM:            return "PROCNUM";
+    default:                    return "UNKNOWN";
+    }
+}
+
+static void _eld_dump_dynamic_phdr(ElfW(Dyn)* phdr, size_t size)
+{
+    int ptr_width = sizeof(void*) == 8 ? 16 : 8;
+
+    size_t cnt = size / sizeof(ElfW(Dyn));
+    size_t i;
+
+    printf("%-*s [VALUE]\n",
+        15, "[TAG]");
+
+    for (i = 0; i < cnt; i++)
+    {
+        printf("%-*s 0x%0*" PRIxPTR "\n",
+            15, _elf_get_dynamic_section_name(phdr[i].d_tag),
+            ptr_width, phdr[i].d_un.d_ptr);
+    }
+}
+
 static int _elf_dump_phdr_callback(struct dl_phdr_info* info, size_t size, void* data)
 {
     (void)size; (void)data;
@@ -690,6 +756,7 @@ static int _elf_dump_phdr_callback(struct dl_phdr_info* info, size_t size, void*
         "relocate: 0x%" PRIxPTR "\n",
         info->dlpi_name,
         info->dlpi_addr);
+
     printf("%-*s %-*s %-*s %-*s %-*s\n",
         12, "[TYPE]",
         ptr_size + 2, "[VADDR]",
@@ -707,8 +774,18 @@ static int _elf_dump_phdr_callback(struct dl_phdr_info* info, size_t size, void*
             ptr_size, (size_t)info->dlpi_phdr[i].p_memsz,
             _elf_get_p_flags(info->dlpi_phdr[i].p_flags));
     }
-    printf("%s\n", str_split);
 
+    size_t dy_size;
+    ElfW(Dyn)* dyn_phdr = _unix_get_dyn_phdr(info, &dy_size);
+    if (dyn_phdr == NULL)
+    {
+        return 0;
+    }
+
+    printf("dynamic phdr:\n");
+    _eld_dump_dynamic_phdr(dyn_phdr, dy_size);
+
+    printf("%s\n", str_split);
     return 0;
 }
 

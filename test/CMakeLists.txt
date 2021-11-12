@@ -1,4 +1,5 @@
 add_library(springboard SHARED "springboard.cpp")
+add_library(separation SHARED "separation.cpp")
 
 add_executable(unittest
     "main.c"
@@ -6,6 +7,7 @@ add_executable(unittest
     "inline_loop.cpp"
     "inline_shared.cpp"
     "inline_simple.cpp"
+    "pltgot_separation.cpp"
     "pltgot_shared.cpp")
-target_link_libraries(unittest PRIVATE cutest uhook springboard)
+target_link_libraries(unittest PRIVATE cutest uhook springboard dl)
 add_test(UnitTest unittest)
