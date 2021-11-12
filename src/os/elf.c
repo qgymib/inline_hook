@@ -251,6 +251,7 @@ static int _elf_gnu_hash_lookup_def(inject_got_ctx_t* self, const char* symbol, 
     return -1;
 }
 
+#if 0
 static int _elf_gnu_hash_lookup_undef(inject_got_ctx_t* self, const char* symbol, size_t* symidx)
 {
     uint32_t i;
@@ -267,6 +268,7 @@ static int _elf_gnu_hash_lookup_undef(inject_got_ctx_t* self, const char* symbol
     }
     return -1;
 }
+#endif
 
 static int _unix_find_symidx_by_name_gnu_hash_lookup(inject_got_ctx_t* info, const char* symbol, size_t* symidx)
 {
@@ -274,10 +276,12 @@ static int _unix_find_symidx_by_name_gnu_hash_lookup(inject_got_ctx_t* info, con
     {
         return 0;
     }
+#if 0
     if (0 == _elf_gnu_hash_lookup_undef(info, symbol, symidx))
     {
         return 0;
     }
+#endif
     return -1;
 }
 
