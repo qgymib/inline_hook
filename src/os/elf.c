@@ -839,15 +839,15 @@ void elf_inject_got_unpatch(void* token)
 {
     inject_got_ctx_t* helper = token;
 
-    // TODO restore GOT
-
     if (helper->inject_info.addr_relplt != 0)
     {
+        //LOG("restore .rel(a).plt region(%p) with function(%p)", (void*)helper->inject_info.addr_relplt, helper->origin);
         _elf_replace_function(helper, helper->inject_info.addr_relplt, helper->origin, NULL);
     }
-    if (helper->inject_info.addr_relplt != 0)
+    if (helper->inject_info.addr_reldyn != 0)
     {
-        _elf_replace_function(helper, helper->inject_info.addr_relplt, helper->origin, NULL);
+        //LOG("restore .rel(a).dyn region(%p) with function(%p)", (void*)helper->inject_info.addr_reldyn, helper->origin);
+        _elf_replace_function(helper, helper->inject_info.addr_reldyn, helper->origin, NULL);
     }
 
     free(helper);
