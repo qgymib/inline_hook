@@ -93,11 +93,12 @@ typedef struct inject_got_ctx
 
     struct
     {
-        ElfW(Addr)  addr_relplt;    /**< Address of inject position .rel(a).plt */
-        ElfW(Addr)  addr_reldyn;    /**< Address of inject position .rel(a).dyn */
+        ElfW(Addr)          addr_relplt;    /**< Address of inject position .rel(a).plt */
+        ElfW(Addr)          addr_reldyn;    /**< Address of inject position .rel(a).dyn */
     }inject_info;
 
-    dynamic_phdr_t  dyn_phdr;       /**< Program header info */
+    struct dl_phdr_info*    phdr_info;
+    dynamic_phdr_t          dyn_phdr;       /**< Program header info */
 }inject_got_ctx_t;
 
 static ElfW(Dyn)* _unix_get_dyn_phdr(struct dl_phdr_info* info, size_t* size)
@@ -369,72 +370,6 @@ static int _unix_find_symidx_by_name(inject_got_ctx_t* info, const char* name, s
     return _unix_find_symidx_by_name_hash_lookup(info, name, symidx);
 }
 
-static int _util_get_mem_protect(uintptr_t addr, size_t len, const char* pathname, unsigned int* prot)
-{
-    uintptr_t  start_addr = addr;
-    uintptr_t  end_addr = addr + len;
-    FILE* fp;
-    char       line[512];
-    uintptr_t  start, end;
-    char       perm[5];
-    int        load0 = 1;
-    int        found_all = 0;
-
-    *prot = 0;
-
-    if (NULL == (fp = fopen("/proc/self/maps", "r"))) return -1;
-
-    while (fgets(line, sizeof(line), fp))
-    {
-        if (NULL != pathname)
-            if (NULL == strstr(line, pathname)) continue;
-
-        if (sscanf(line, "%"PRIxPTR"-%"PRIxPTR" %4s ", &start, &end, perm) != 3) continue;
-
-        if (perm[3] != 'p') continue;
-
-        if (start_addr >= start && start_addr < end)
-        {
-            if (load0)
-            {
-                //first load segment
-                if (perm[0] == 'r') *prot |= PROT_READ;
-                if (perm[1] == 'w') *prot |= PROT_WRITE;
-                if (perm[2] == 'x') *prot |= PROT_EXEC;
-                load0 = 0;
-            }
-            else
-            {
-                //others
-                if (perm[0] != 'r') *prot &= ~PROT_READ;
-                if (perm[1] != 'w') *prot &= ~PROT_WRITE;
-                if (perm[2] != 'x') *prot &= ~PROT_EXEC;
-            }
-
-            if (end_addr <= end)
-            {
-                found_all = 1;
-                break; //finished
-            }
-            else
-            {
-                start_addr = end; //try to find the next load segment
-            }
-        }
-    }
-
-    fclose(fp);
-
-    if (!found_all) return -1;
-
-    return 0;
-}
-
-static int _util_get_addr_protect(uintptr_t addr, const char* pathname, unsigned int* prot)
-{
-    return _util_get_mem_protect(addr, sizeof(addr), pathname, prot);
-}
-
 static int _util_set_addr_protect(uintptr_t addr, unsigned int prot, size_t page_size)
 {
     if (0 != mprotect(_page_of((void*)addr, page_size), page_size, (int)prot))
@@ -443,6 +378,45 @@ static int _util_set_addr_protect(uintptr_t addr, unsigned int prot, size_t page
     }
 
     return 0;
+}
+
+static int _elf_get_addr_protect(inject_got_ctx_t* self, void* addr, unsigned int* prot)
+{
+    struct dl_phdr_info* phdr_info = self->phdr_info;
+    uintptr_t offset = (uintptr_t)addr - self->relocation;
+
+    if ((uintptr_t)addr < self->relocation)
+    {
+        return -1;
+    }
+    *prot = 0;
+
+    size_t idx;
+    for (idx = 0; idx < phdr_info->dlpi_phnum; idx++)
+    {
+        uintptr_t start_addr = phdr_info->dlpi_phdr[idx].p_vaddr;
+        uintptr_t end_addr = start_addr + phdr_info->dlpi_phdr[idx].p_memsz;
+
+        if (start_addr <= offset && offset <= end_addr)
+        {
+            if (phdr_info->dlpi_phdr[idx].p_flags & PF_W)
+            {
+                *prot = *prot | PROT_WRITE;
+            }
+			if (phdr_info->dlpi_phdr[idx].p_flags & PF_R)
+			{
+				*prot = *prot | PROT_READ;
+			}
+			if (phdr_info->dlpi_phdr[idx].p_flags & PF_X)
+			{
+				*prot = *prot | PROT_EXEC;
+			}
+
+            return 0;
+        }
+    }
+
+    return -1;
 }
 
 static int _elf_replace_function(inject_got_ctx_t* self, ElfW(Addr) addr, void* new_func, void** old_func)
@@ -457,7 +431,7 @@ static int _elf_replace_function(inject_got_ctx_t* self, ElfW(Addr) addr, void* 
     if (*(void**)addr == new_func) return 0;
 
     //get old prot
-    if (0 != (r = _util_get_addr_protect(addr, self->elfpath, &old_prot)))
+    if (0 != (r = _elf_get_addr_protect(self, (void*)addr, &old_prot)))
     {
         LOG("get addr(%p) prot failed. ret: %d", (void*)addr, r);
         return r;
@@ -637,6 +611,7 @@ static int _unix_dl_iterate_phdr_got(struct dl_phdr_info* info, size_t size, voi
     (void)size;
 
     inject_got_ctx_t* helper = data;
+    helper->phdr_info = info;
     helper->relocation = info->dlpi_addr;
     snprintf(helper->elfpath, sizeof(helper->elfpath), "%s", info->dlpi_name);
 
