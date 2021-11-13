@@ -97,7 +97,7 @@ typedef struct inject_got_ctx
         ElfW(Addr)  addr_reldyn;    /**< Address of inject position .rel(a).dyn */
     }inject_info;
 
-    dynamic_phdr_t  phdr_info;      /**< Program header info */
+    dynamic_phdr_t  dyn_phdr;       /**< Program header info */
 }inject_got_ctx_t;
 
 static ElfW(Dyn)* _unix_get_dyn_phdr(struct dl_phdr_info* info, size_t* size)
@@ -157,33 +157,33 @@ static int _unix_parser_dyn_phdr(inject_got_ctx_t* dst, ElfW(Dyn)* dyn_phdr, siz
             break;
 
         case DT_STRTAB:
-            dst->phdr_info.strtab = (const char*)dyn_phdr[i].d_un.d_ptr;
+            dst->dyn_phdr.strtab = (const char*)dyn_phdr[i].d_un.d_ptr;
             break;
 
         case DT_SYMTAB:
-            dst->phdr_info.symtab = (ElfW(Sym)*)dyn_phdr[i].d_un.d_ptr;
+            dst->dyn_phdr.symtab = (ElfW(Sym)*)dyn_phdr[i].d_un.d_ptr;
             break;
 
         case DT_PLTREL:
-            dst->phdr_info.is_rela = dyn_phdr[i].d_un.d_val == DT_RELA;
+            dst->dyn_phdr.is_rela = dyn_phdr[i].d_un.d_val == DT_RELA;
             break;
 
         case DT_JMPREL:
-            dst->phdr_info.relplt = dyn_phdr[i].d_un.d_ptr;
+            dst->dyn_phdr.relplt = dyn_phdr[i].d_un.d_ptr;
             break;
 
         case DT_PLTRELSZ:
-            dst->phdr_info.relplt_sz = dyn_phdr[i].d_un.d_val;
+            dst->dyn_phdr.relplt_sz = dyn_phdr[i].d_un.d_val;
             break;
 
         case DT_REL:
         case DT_RELA:
-            dst->phdr_info.reldyn = dyn_phdr[i].d_un.d_ptr;
+            dst->dyn_phdr.reldyn = dyn_phdr[i].d_un.d_ptr;
             break;
 
         case DT_RELSZ:
         case DT_RELASZ:
-            dst->phdr_info.reldyn_sz = dyn_phdr[i].d_un.d_val;
+            dst->dyn_phdr.reldyn_sz = dyn_phdr[i].d_un.d_val;
             break;
 
         case DT_GNU_HASH:
@@ -198,29 +198,29 @@ static int _unix_parser_dyn_phdr(inject_got_ctx_t* dst, ElfW(Dyn)* dyn_phdr, siz
             }
 
             uint32_t* raw = (uint32_t*)dyn_phdr[i].d_un.d_ptr;
-            dst->phdr_info.bucket_cnt = raw[0];
-            dst->phdr_info.symoffset = raw[1];
-            dst->phdr_info.bloom_sz = raw[2];
-            dst->phdr_info.bloom_shift = raw[3];
-            dst->phdr_info.bloom = (ElfW(Addr)*)(&raw[4]);
-            dst->phdr_info.bucket = (uint32_t*)(&(dst->phdr_info.bloom[dst->phdr_info.bloom_sz]));
-            dst->phdr_info.chain = (uint32_t*)(&(dst->phdr_info.bucket[dst->phdr_info.bucket_cnt]));
+            dst->dyn_phdr.bucket_cnt = raw[0];
+            dst->dyn_phdr.symoffset = raw[1];
+            dst->dyn_phdr.bloom_sz = raw[2];
+            dst->dyn_phdr.bloom_shift = raw[3];
+            dst->dyn_phdr.bloom = (ElfW(Addr)*)(&raw[4]);
+            dst->dyn_phdr.bucket = (uint32_t*)(&(dst->dyn_phdr.bloom[dst->dyn_phdr.bloom_sz]));
+            dst->dyn_phdr.chain = (uint32_t*)(&(dst->dyn_phdr.bucket[dst->dyn_phdr.bucket_cnt]));
             break;
         }
 
         case DT_HASH:
         {
             /* ignore DT_HASH when ELF contains DT_GNU_HASH hash table */
-            if (dst->phdr_info.bloom != NULL)
+            if (dst->dyn_phdr.bloom != NULL)
             {
                 continue;
             }
 
             uint32_t* raw = (uint32_t*)dyn_phdr[i].d_un.d_ptr;
-            dst->phdr_info.bucket_cnt = raw[0];
-            dst->phdr_info.chain_cnt = raw[1];
-            dst->phdr_info.bucket = &raw[2];
-            dst->phdr_info.chain = &(dst->phdr_info.bucket[dst->phdr_info.bucket_cnt]);
+            dst->dyn_phdr.bucket_cnt = raw[0];
+            dst->dyn_phdr.chain_cnt = raw[1];
+            dst->dyn_phdr.bucket = &raw[2];
+            dst->dyn_phdr.chain = &(dst->dyn_phdr.bucket[dst->dyn_phdr.bucket_cnt]);
             break;
         }
 
@@ -248,17 +248,17 @@ static int _elf_gnu_hash_lookup_def(inject_got_ctx_t* self, const char* symbol, 
     uint32_t hash = _elf_gnu_hash((uint8_t*)symbol);
 
     static uint32_t elfclass_bits = sizeof(ElfW(Addr)) * 8;
-    size_t word = self->phdr_info.bloom[(hash / elfclass_bits) % self->phdr_info.bloom_sz];
+    size_t word = self->dyn_phdr.bloom[(hash / elfclass_bits) % self->dyn_phdr.bloom_sz];
     size_t mask = 0
         | (size_t)1 << (hash % elfclass_bits)
-        | (size_t)1 << ((hash >> self->phdr_info.bloom_shift) % elfclass_bits);
+        | (size_t)1 << ((hash >> self->dyn_phdr.bloom_shift) % elfclass_bits);
 
     //if at least one bit is not set, this symbol is surely missing
     if ((word & mask) != mask) return -1;
 
     //ignore STN_UNDEF
-    uint32_t i = self->phdr_info.bucket[hash % self->phdr_info.bucket_cnt];
-    if (i < self->phdr_info.symoffset)
+    uint32_t i = self->dyn_phdr.bucket[hash % self->dyn_phdr.bucket_cnt];
+    if (i < self->dyn_phdr.symoffset)
     {
         return -1;
     }
@@ -266,8 +266,8 @@ static int _elf_gnu_hash_lookup_def(inject_got_ctx_t* self, const char* symbol, 
     //loop through the chain
     while (1)
     {
-        const char* symname = self->phdr_info.strtab + self->phdr_info.symtab[i].st_name;
-        const uint32_t  symhash = self->phdr_info.chain[i - self->phdr_info.symoffset];
+        const char* symname = self->dyn_phdr.strtab + self->dyn_phdr.symtab[i].st_name;
+        const uint32_t  symhash = self->dyn_phdr.chain[i - self->dyn_phdr.symoffset];
 
         if ((hash | (uint32_t)1) == (symhash | (uint32_t)1) && 0 == strcmp(symbol, symname))
         {
@@ -344,10 +344,10 @@ static int _unix_find_symidx_by_name_hash_lookup(inject_got_ctx_t* info, const c
     const char* symbol_cur;
     uint32_t    i;
 
-    for (i = info->phdr_info.bucket[hash % info->phdr_info.bucket_cnt];
-        0 != i; i = info->phdr_info.chain[i])
+    for (i = info->dyn_phdr.bucket[hash % info->dyn_phdr.bucket_cnt];
+        0 != i; i = info->dyn_phdr.chain[i])
     {
-        symbol_cur = info->phdr_info.strtab + info->phdr_info.symtab[i].st_name;
+        symbol_cur = info->dyn_phdr.strtab + info->dyn_phdr.symtab[i].st_name;
 
         if (0 == strcmp(symbol, symbol_cur))
         {
@@ -362,7 +362,7 @@ static int _unix_find_symidx_by_name_hash_lookup(inject_got_ctx_t* info, const c
 
 static int _unix_find_symidx_by_name(inject_got_ctx_t* info, const char* name, size_t* symidx)
 {
-    if (info->phdr_info.bloom != NULL)
+    if (info->dyn_phdr.bloom != NULL)
     {
         return _unix_find_symidx_by_name_gnu_hash_lookup(info, name, symidx);
     }
@@ -552,7 +552,7 @@ static int _elf_find_and_replace_func(inject_got_ctx_t* self,
 
     if (NULL != found) *found = 0;
 
-    if (!_elf_check_symbol(rel_common, symidx, self->phdr_info.is_rela, is_plt, &r_offset))
+    if (!_elf_check_symbol(rel_common, symidx, self->dyn_phdr.is_rela, is_plt, &r_offset))
     {
         return 0;
     }
@@ -590,12 +590,12 @@ static int _elf_inject_plt_got(inject_got_ctx_t* helper)
     int found_reldyn = 0;
     int r;
 
-    size_t step_width = helper->phdr_info.is_rela ? sizeof(ElfW(Rela)) : sizeof(ElfW(Rel));
+    size_t step_width = helper->dyn_phdr.is_rela ? sizeof(ElfW(Rela)) : sizeof(ElfW(Rel));
 
     //replace for .rel(a).plt
-    if (0 != helper->phdr_info.relplt)
+    if (0 != helper->dyn_phdr.relplt)
     {
-        FOREACH_BLOCK(rel_common, helper->phdr_info.relplt, helper->phdr_info.relplt_sz, step_width)
+        FOREACH_BLOCK(rel_common, helper->dyn_phdr.relplt, helper->dyn_phdr.relplt_sz, step_width)
         {
             if (0 != (r = _elf_find_and_replace_func(helper, 1,
                 helper->detour, &helper->origin,
@@ -611,9 +611,9 @@ static int _elf_inject_plt_got(inject_got_ctx_t* helper)
     }
 
     //replace for .rel(a).dyn
-    if (0 != helper->phdr_info.reldyn)
+    if (0 != helper->dyn_phdr.reldyn)
     {
-        FOREACH_BLOCK(rel_common, helper->phdr_info.reldyn, helper->phdr_info.reldyn_sz, step_width)
+        FOREACH_BLOCK(rel_common, helper->dyn_phdr.reldyn, helper->dyn_phdr.reldyn_sz, step_width)
         {
             if (0 != (r = _elf_find_and_replace_func(helper, 0,
                 helper->detour, &helper->origin,
@@ -641,15 +641,15 @@ static int _unix_dl_iterate_phdr_got(struct dl_phdr_info* info, size_t size, voi
     snprintf(helper->elfpath, sizeof(helper->elfpath), "%s", info->dlpi_name);
 
     /* find PT_DYNAMIC phdr */
-    helper->phdr_info.dyn_phdr = _unix_get_dyn_phdr(info, &helper->phdr_info.dyn_phdr_size);
-    if (helper->phdr_info.dyn_phdr == NULL)
+    helper->dyn_phdr.dyn_phdr = _unix_get_dyn_phdr(info, &helper->dyn_phdr.dyn_phdr_size);
+    if (helper->dyn_phdr.dyn_phdr == NULL)
     {
         return 0;
     }
     //LOG("phdr_dyn location: %p in `%s`", helper->phdr_info.dyn_phdr, info->dlpi_name);
 
     /* Parser PT_DYNAMIC program header */
-    if (_unix_parser_dyn_phdr(helper, helper->phdr_info.dyn_phdr, helper->phdr_info.dyn_phdr_size, info) < 0)
+    if (_unix_parser_dyn_phdr(helper, helper->dyn_phdr.dyn_phdr, helper->dyn_phdr.dyn_phdr_size, info) < 0)
     {
         return 0;
     }
