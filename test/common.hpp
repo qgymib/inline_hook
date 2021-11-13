@@ -20,6 +20,8 @@ extern "C" {
 }
 #endif
 
+extern "C" void uhook_dump_phdr(const char* dlname);
+
 class common
 {
 public:

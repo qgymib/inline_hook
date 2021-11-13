@@ -16,7 +16,7 @@ API_LOCAL void* elf_get_relocation_by_addr(void* symbol);
 
 API_LOCAL size_t elf_get_function_size(void* symbol);
 
-API_LOCAL void uhook_dump_phdr(void);
+API_LOCAL void uhook_dump_phdr(const char* dlname);
 
 #ifdef __cplusplus
 }

@@ -459,7 +459,7 @@ static int _elf_replace_function(inject_got_ctx_t* self, ElfW(Addr) addr, void* 
     //get old prot
     if (0 != (r = _util_get_addr_protect(addr, self->elfpath, &old_prot)))
     {
-        LOG("get addr prot failed. ret: %d", r);
+        LOG("get addr(%p) prot failed. ret: %d", (void*)addr, r);
         return r;
     }
 
@@ -656,7 +656,7 @@ static int _unix_dl_iterate_phdr_got(struct dl_phdr_info* info, size_t size, voi
 
     if (_unix_find_symidx_by_name(helper, helper->name, &helper->symidx) < 0)
     {/* Not found, find next shared phdr */
-        //LOG("symbol(%s) not found in `%s`", helper->name, info->dlpi_name);
+        LOG("symbol(%s) not found in `%s`", helper->name, info->dlpi_name);
         return 0;
     }
 
@@ -803,13 +803,34 @@ static void _eld_dump_dynamic_phdr(ElfW(Dyn)* phdr, size_t size)
     }
 }
 
+static int _pattern_matches_string(const char* pat, const char* str)
+{
+    switch (*pat)
+    {
+    case '\0':
+        return *str == '\0';
+    case '?':
+        return *str != '\0' && _pattern_matches_string(pat + 1, str + 1);
+    case '*':
+        return (*str != '\0' && _pattern_matches_string(pat, str + 1)) || _pattern_matches_string(pat + 1, str);
+    default:
+        return *pat == *str && _pattern_matches_string(pat + 1, str + 1);
+    }
+}
+
 static int _elf_dump_phdr_callback(struct dl_phdr_info* info, size_t size, void* data)
 {
-    (void)size; (void)data;
+    (void)size;
 
+    const char* dlname = data;
     const char* str_split = sizeof(void*) == 8 ?
         "--------------------------------------------------" : "----------------------------------";
     int ptr_size = sizeof(void*) == 8 ? 16 : 8;
+
+    if (dlname != NULL && !_pattern_matches_string(dlname, info->dlpi_name))
+    {
+        return 0;
+    }
 
     printf("%s\n", str_split);
     printf("name: %s\n"
@@ -846,7 +867,7 @@ static int _elf_dump_phdr_callback(struct dl_phdr_info* info, size_t size, void*
     _eld_dump_dynamic_phdr(dyn_phdr, dy_size);
 
     printf("%s\n", str_split);
-    return 0;
+    return dlname != NULL ? 1 : 0;
 }
 
 /**
@@ -1022,7 +1043,7 @@ size_t elf_get_function_size(void* symbol)
     return _elf_get_function_size_from_object(path_buffer, symbol);
 }
 
-void uhook_dump_phdr(void)
+void uhook_dump_phdr(const char* dlname)
 {
-    dl_iterate_phdr(_elf_dump_phdr_callback, NULL);
+    dl_iterate_phdr(_elf_dump_phdr_callback, (void*)dlname);
 }

@@ -7,6 +7,7 @@ add_executable(unittest
     "inline_loop.cpp"
     "inline_shared.cpp"
     "inline_simple.cpp"
+    "pltgot_malloc.cpp"
     "pltgot_separation.cpp"
     "pltgot_shared.cpp")
 target_link_libraries(unittest PRIVATE cutest uhook springboard dl)
