@@ -60,9 +60,9 @@ typedef struct dynamic_phdr
     ElfW(Sym)*      symtab;         /**< .dynsym (symbol-index to string-table's offset) */
     int             is_rela;        /**< Rela / Rel */
 
-    ElfW(Addr)      relplt;         /**< .rel.plt or .rela.plt */
+    ElfW(Addr)      relplt;         /**< DT_JMPREL */
     ElfW(Word)      relplt_sz;
-    ElfW(Addr)      reldyn;         /**< .rel.dyn or .rela.dyn */
+    ElfW(Addr)      reldyn;         /**< DT_REL/DT_RELA */
     ElfW(Word)      reldyn_sz;
 
     /* ELF Hash */
@@ -380,6 +380,7 @@ static int _util_set_addr_protect(uintptr_t addr, unsigned int prot, size_t page
     return 0;
 }
 
+#if 0
 static int _elf_get_addr_protect(inject_got_ctx_t* self, void* addr, unsigned int* prot)
 {
     struct dl_phdr_info* phdr_info = self->phdr_info;
@@ -418,6 +419,7 @@ static int _elf_get_addr_protect(inject_got_ctx_t* self, void* addr, unsigned in
 
     return -1;
 }
+#endif
 
 static int _elf_replace_function(inject_got_ctx_t* self, ElfW(Addr) addr, void* new_func, void** old_func)
 {
@@ -430,12 +432,14 @@ static int _elf_replace_function(inject_got_ctx_t* self, ElfW(Addr) addr, void* 
     //here we assume that we always have read permission, is this a problem?
     if (*(void**)addr == new_func) return 0;
 
+#if 0
     //get old prot
     if (0 != (r = _elf_get_addr_protect(self, (void*)addr, &old_prot)))
     {
         LOG("get addr(%p) prot failed. ret: %d", (void*)addr, r);
         return r;
     }
+#endif
 
     if (old_prot != need_prot)
     {
